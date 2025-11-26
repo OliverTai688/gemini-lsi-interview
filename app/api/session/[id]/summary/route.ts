@@ -16,7 +16,7 @@ function extractJson(raw: string) {
 
 // ---------- POST ----------
 export async function POST(req: Request, context: any) {
-    const { id } = await context.params;     // ★★★ FIX
+    const { id } = await context.params;
     const sessionId = id;
 
     try {
@@ -41,7 +41,7 @@ export async function POST(req: Request, context: any) {
             .join("\n");
 
         const prompt = `
-你是一位熟悉敘事心理學（Narrative Identity）、生命故事訪談（Life Story Interview; McAdams, 1996），
+        你是一位熟悉敘事心理學（Narrative Identity）、生命故事訪談（Life Story Interview; McAdams, 1996），
 並參考 Adler et al. (2016)「meaning-making as growth」與心理治療敘事分析架構的專家。
 
 請依據逐字稿，生成「繁體中文、段落式、深度描述」的 JSON。
@@ -113,13 +113,8 @@ export async function POST(req: Request, context: any) {
 以下是逐字稿：
 ${transcript}
 
+        `;
 
-
-
-`;
-
-
-        // ⭐ New OpenAI Responses API
         const response = await client.responses.create({
             model: "gpt-4o-mini",
             input: prompt,
@@ -136,9 +131,10 @@ ${transcript}
             jsonSummary = { overview: clean };
         }
 
+        // ★★★ save JSON object directly
         await prisma.session.update({
             where: { id: sessionId },
-            data: { summary: JSON.stringify(jsonSummary) },
+            data: { summary: jsonSummary },
         });
 
         return NextResponse.json({ sessionId, summary: jsonSummary });
@@ -153,7 +149,7 @@ ${transcript}
 
 // ---------- GET ----------
 export async function GET(req: Request, context: any) {
-    const { id } = await context.params;     // ★★★ FIX
+    const { id } = await context.params;
     const sessionId = id;
 
     try {
@@ -166,18 +162,9 @@ export async function GET(req: Request, context: any) {
             return NextResponse.json({ error: "Session not found" }, { status: 404 });
         }
 
-        let summaryJson = null;
-        if (session.summary) {
-            try {
-                summaryJson = JSON.parse(session.summary);
-            } catch {
-                summaryJson = { overview: session.summary };
-            }
-        }
-
         return NextResponse.json({
             sessionId,
-            summary: summaryJson,
+            summary: session.summary,  // ← Already JSON
             session_title: session.title,
         });
     } catch (err) {
