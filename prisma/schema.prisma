@@ -1,0 +1,33 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mongodb"
+  url      = env("DATABASE_URL")
+}
+
+model Session {
+  id           String    @id @default(auto()) @map("_id") @db.ObjectId
+  title        String?                                      // 新增
+  createdAt    DateTime  @default(now())                    // 新增
+  summary      String?
+  turns        Turn[]
+
+  // Virtual computed field，不存 DB → 由 API 計算
+  // message_count: turns.length
+}
+
+model Turn {
+  id         String   @id @default(auto()) @map("_id") @db.ObjectId
+  sessionId  String   @db.ObjectId
+  session    Session  @relation(fields: [sessionId], references: [id])
+
+  speaker    String
+  text       String
+  createdAt  DateTime @default(now())
+
+  replied    Boolean  @default(false) 
+  audioBase64 String?
+}
+
