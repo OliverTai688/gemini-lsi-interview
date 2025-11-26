@@ -473,7 +473,7 @@ try {
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => router.push("/")}
+              onClick={() => router.push("/home")}
               className="text-gray-600 hover:text-black"
             >
               <ChevronLeft className="w-4 h-4 mr-1" />
