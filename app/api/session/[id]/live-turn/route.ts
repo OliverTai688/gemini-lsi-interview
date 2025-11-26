@@ -7,10 +7,13 @@ export const runtime = "nodejs";
 type LiveTurnBody = {
   userText: string;
   aiText: string;
-  audioBase64?: string | null; // AI 語音（可選）
+  audioBase64?: string | null;
 };
 
-export async function POST(req: Request, context: any) {
+export async function POST(
+  req: Request,
+  context: { params: Promise<{ id: string }> }
+) {
   const { id: sessionId } = await context.params;
 
   try {
@@ -25,7 +28,7 @@ export async function POST(req: Request, context: any) {
       );
     }
 
-    // 建立 user turn
+    // --- user turn ---
     let userTurnId: string | null = null;
     if (userText) {
       const userTurn = await prisma.turn.create({
@@ -33,13 +36,13 @@ export async function POST(req: Request, context: any) {
           sessionId,
           speaker: "user",
           text: userText,
-          replied: true, // live 模式就直接視為已處理
+          replied: true,
         },
       });
       userTurnId = userTurn.id;
     }
 
-    // 建立 AI turn（包含 audioBase64）
+    // --- assistant turn ---
     let aiTurnId: string | null = null;
     if (aiText) {
       const aiTurn = await prisma.turn.create({

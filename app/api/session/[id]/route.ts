@@ -1,12 +1,15 @@
+//api/session/[id]/route.ts
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
 
 export async function GET(
   req: Request,
-  { params }: { params: { id: string } }
+  ctx: { params: Promise<{ id: string }> }
 ) {
+  const { id } = await ctx.params;
+
   const session = await prisma.session.findUnique({
-    where: { id: params.id },
+    where: { id },
     include: {
       turns: {
         orderBy: { createdAt: "asc" },

@@ -14,7 +14,10 @@ const sseHeaders = {
   Connection: "keep-alive",
 };
 
-export async function GET(req: Request, context: any) {
+export async function GET(
+  req: Request,
+  context: { params: Promise<{ id: string }> }
+) {
   const { id: sessionId } = await context.params;
 
   // 找最新未處理的 user turn
@@ -26,28 +29,39 @@ export async function GET(req: Request, context: any) {
   if (!lastUserTurn) {
     const idle = new ReadableStream({
       start(controller) {
-        controller.enqueue(`data: ${JSON.stringify({ type: "idle" })}\n\n`);
+        controller.enqueue(
+          `data: ${JSON.stringify({ type: "idle" })}\n\n`
+        );
         controller.close();
       },
     });
+
     return new NextResponse(idle, { headers: sseHeaders });
   }
 
-  // 🚀 立即鎖住避免重複處理
+  // 立即鎖住避免重複處理
   await prisma.turn.update({
     where: { id: lastUserTurn.id },
     data: { replied: true },
   });
 
-  // === SSE Stream 開始 ===
+  // SSE Stream
   const stream = new ReadableStream({
     async start(controller) {
-      controller.enqueue(`data: ${JSON.stringify({ type: "thinking" })}\n\n`);
+      controller.enqueue(
+        `data: ${JSON.stringify({ type: "thinking" })}\n\n`
+      );
 
-      const responseStream = await genai.models.generateContentStream({
-        model: "gemini-2.5-flash-tts",
-        contents: [{ role: "user", parts: [{ text: lastUserTurn.text }] }],
-      });
+      const responseStream =
+        await genai.models.generateContentStream({
+          model: "gemini-2.5-flash-tts",
+          contents: [
+            {
+              role: "user",
+              parts: [{ text: lastUserTurn.text }],
+            },
+          ],
+        });
 
       let aiText = "";
 
@@ -67,7 +81,7 @@ export async function GET(req: Request, context: any) {
         );
       }
 
-      // 儲存 AI 回覆
+      // 儲存回覆
       await prisma.turn.create({
         data: {
           sessionId,
@@ -76,7 +90,9 @@ export async function GET(req: Request, context: any) {
         },
       });
 
-      controller.enqueue(`data: ${JSON.stringify({ type: "complete" })}\n\n`);
+      controller.enqueue(
+        `data: ${JSON.stringify({ type: "complete" })}\n\n`
+      );
       controller.close();
     },
   });
