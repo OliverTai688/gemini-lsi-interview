@@ -8,14 +8,11 @@ datasource db {
 }
 
 model Session {
-  id           String    @id @default(auto()) @map("_id") @db.ObjectId
-  title        String?                                      // 新增
-  createdAt    DateTime  @default(now())                    // 新增
-  summary      String?
-  turns        Turn[]
-
-  // Virtual computed field，不存 DB → 由 API 計算
-  // message_count: turns.length
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  title     String?
+  createdAt DateTime @default(now())
+  summary   String?
+  turns     Turn[]
 }
 
 model Turn {
@@ -26,8 +23,6 @@ model Turn {
   speaker    String
   text       String
   createdAt  DateTime @default(now())
-
-  replied    Boolean  @default(false) 
+  replied    Boolean  @default(false)
   audioBase64 String?
 }
-
