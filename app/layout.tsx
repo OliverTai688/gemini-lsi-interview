@@ -6,10 +6,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en">
       <body>
-        <SessionProvider>
-          <LanguageProvider>
-            {children}
-          </LanguageProvider>
+         <SessionProvider>
+        <LanguageProvider>
+          {children}
+        </LanguageProvider>
         </SessionProvider>
       </body>
     </html>

@@ -21,9 +21,9 @@ const OnboardingPage = () => {
 
   useEffect(() => {
     if (session?.user?.onboardingCompleted) {
-      router.replace("/");  // 用 replace() 不留下歷史紀錄
+      router.replace("/home");  // 用 replace() 不留下歷史紀錄
     }
-  }, [session, router]);
+  }, [session]);
 
   /** -------------------------
    * 狀態 1：還在讀取 session
