@@ -601,7 +601,7 @@ try {
           </div>
 
           {/* Text mode */}
-          <div className="flex items-center gap-2 mt-2">
+          {/* <div className="flex items-center gap-2 mt-2">
             <Input
               placeholder={t.sessionPage.textPlaceholder}
               value={textInput}
@@ -622,7 +622,7 @@ try {
             >
               Send
             </Button>
-          </div>
+          </div> */}
         </div>
       </footer>
     </div>
