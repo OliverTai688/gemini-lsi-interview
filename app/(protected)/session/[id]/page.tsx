@@ -14,6 +14,8 @@ import {
   FileText,
   Sparkles,
   ChevronLeft,
+  PenLine,
+  ImagePlus,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -34,6 +36,17 @@ import {
   decode,
   decodeAudioData,
 } from "@/lib/audio-utils";
+import { ASSET_RULES, baseMime } from "@/lib/assets";
+import { uploadAsset } from "@/lib/asset-upload";
+import { toJpegBase64 } from "@/lib/image-utils";
+import {
+  AUDIO_MIME_TYPES,
+  SegmentedRecorder,
+} from "@/lib/segmented-recorder";
+import Whiteboard from "@/components/Whiteboard";
+
+// 訪談錄音每 60 秒切一段上傳 → 分頁當掉最多損失最後一段
+const RECORDING_SEGMENT_MS = 60_000;
 
 // -------------------------
 // 型別
@@ -42,7 +55,6 @@ type ChatMessage = {
   role: "user" | "assistant";
   content: string;
   timestamp: string;
-  audioBase64?: string | null;
 };
 
 type Status = "idle" | "connecting" | "connected" | "error";
@@ -53,7 +65,6 @@ type TranscriptResponse = {
     role: "user" | "model" | "assistant";
     content: string;
     timestamp: string;
-    audioBase64?: string | null;
   }[];
 };
 
@@ -73,6 +84,12 @@ export default function LiveInterviewPage() {
 
   const [currentInput, setCurrentInput] = useState("");
   const [currentOutput, setCurrentOutput] = useState("");
+
+  const [whiteboardOpen, setWhiteboardOpen] = useState(false);
+  // 訪談連線中的混音（麥克風 + AI 語音）→ 白板錄影時當音軌
+  const [mixStream, setMixStream] = useState<MediaStream | null>(null);
+  const [pendingUploads, setPendingUploads] = useState(0);
+  const [uploadNotice, setUploadNotice] = useState("");
 
   // -------------------------
   // Refs
@@ -94,7 +111,14 @@ export default function LiveInterviewPage() {
   const currentInputRef = useRef("");
   const currentOutputRef = useRef("");
   const messagesRef = useRef<ChatMessage[]>([]);
-  const audioChunksBase64Ref = useRef<string[]>([]);
+
+  const recDestRef = useRef<MediaStreamAudioDestinationNode | null>(null);
+  const recorderRef = useRef<SegmentedRecorder | null>(null);
+  const imageInputRef = useRef<HTMLInputElement | null>(null);
+
+  // 這一回合雙方各自開始說話的時間 → 對回錄音位置
+  const userStartedAtRef = useRef<string | null>(null);
+  const aiStartedAtRef = useRef<string | null>(null);
 
   const buildContextHistory = (msgs: ChatMessage[]) => {
   return msgs
@@ -127,7 +151,6 @@ export default function LiveInterviewPage() {
             role: m.role === "model" ? "assistant" : (m.role as "user" | "assistant"),
             content: m.content,
             timestamp: m.timestamp,
-            audioBase64: m.audioBase64 ?? null,
           })) ?? [];
 
         setMessages(loaded);
@@ -147,9 +170,71 @@ export default function LiveInterviewPage() {
   }, [messages, currentOutput]);
 
   // -------------------------
+  // 素材上傳（R2）
+  // -------------------------
+  const trackUpload = useCallback((upload: Promise<unknown>) => {
+    setPendingUploads((n) => n + 1);
+    upload
+      .catch((err) => {
+        console.error("Asset upload failed:", err);
+        setUploadNotice(t.sessionPage.uploadFailed);
+      })
+      .finally(() => setPendingUploads((n) => n - 1));
+  }, [t.sessionPage.uploadFailed]);
+
+  // 還有素材在上傳時，離開頁面前先提醒
+  useEffect(() => {
+    if (pendingUploads === 0) return;
+    const warn = (e: BeforeUnloadEvent) => e.preventDefault();
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [pendingUploads]);
+
+  // 把畫面（白板 / 圖片）送給 AI 訪談員
+  const sendImageToAI = useCallback((jpegBase64: string) => {
+    sessionPromiseRef.current?.then((session) => {
+      session.sendRealtimeInput({
+        video: { data: jpegBase64, mimeType: "image/jpeg" },
+      });
+    });
+  }, []);
+
+  const handleImageSelected = async (file: File) => {
+    const rule = ASSET_RULES.IMAGE;
+    if (!rule.types[baseMime(file.type)] || file.size > rule.maxBytes) {
+      setUploadNotice(t.sessionPage.imageInvalid);
+      return;
+    }
+    setUploadNotice("");
+
+    trackUpload(
+      uploadAsset(id, file, {
+        kind: "IMAGE",
+        startedAt: new Date(),
+        title: file.name,
+      })
+    );
+
+    if (status === "connected") {
+      try {
+        const bitmap = await createImageBitmap(file);
+        sendImageToAI(toJpegBase64(bitmap, bitmap.width, bitmap.height, 1024, 0.8));
+      } catch (err) {
+        console.error("Failed to send image to AI:", err);
+      }
+    }
+  };
+
+  // -------------------------
   // 停止音訊管線
   // -------------------------
   const stopAudioProcessing = useCallback(() => {
+    // 先停錄音（最後一段會在背景上傳），再關音軌
+    void recorderRef.current?.stop();
+    recorderRef.current = null;
+    recDestRef.current = null;
+    setMixStream(null);
+
     if (mediaStreamRef.current) {
       mediaStreamRef.current.getTracks().forEach((track) => track.stop());
       mediaStreamRef.current = null;
@@ -213,7 +298,8 @@ export default function LiveInterviewPage() {
       setCurrentOutput("");
       currentInputRef.current = "";
       currentOutputRef.current = "";
-      audioChunksBase64Ref.current = [];
+      userStartedAtRef.current = null;
+      aiStartedAtRef.current = null;
 
       try {
         const apiKey = process.env.NEXT_PUBLIC_GOOGLE_API_KEY;
@@ -270,6 +356,36 @@ try {
   const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
   mediaStreamRef.current = stream;
 
+  // --- 4) 錄音：麥克風 + AI 語音混成一軌，分段上傳 R2 ---
+  try {
+    const recDest = outCtx.createMediaStreamDestination();
+    outCtx.createMediaStreamSource(stream).connect(recDest);
+    recDestRef.current = recDest;
+    setMixStream(recDest.stream);
+
+    const recordingId = crypto.randomUUID();
+    const recorder = new SegmentedRecorder(recDest.stream, {
+      mimeTypes: AUDIO_MIME_TYPES,
+      segmentMs: RECORDING_SEGMENT_MS,
+      audioBitsPerSecond: 48_000,
+      onSegment: (segment) => {
+        trackUpload(
+          uploadAsset(id, segment.blob, {
+            kind: "INTERVIEW_AUDIO",
+            groupId: recordingId,
+            seq: segment.seq,
+            startedAt: segment.startedAt,
+            durationMs: segment.durationMs,
+          })
+        );
+      },
+    });
+    recorder.start();
+    recorderRef.current = recorder;
+  } catch (err) {
+    console.error("Failed to start recording:", err);
+  }
+
   const source = inCtx.createMediaStreamSource(stream);
   mediaStreamSourceRef.current = source;
 
@@ -294,6 +410,7 @@ try {
               // 使用者語音文字
               const userText = message.serverContent?.inputTranscription?.text;
               if (userText) {
+                userStartedAtRef.current ??= new Date().toISOString();
                 currentInputRef.current += userText;
                 setCurrentInput(currentInputRef.current);
               }
@@ -310,7 +427,7 @@ try {
                 message.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
 
               if (base64Audio && outputAudioContextRef.current) {
-                audioChunksBase64Ref.current.push(base64Audio);
+                aiStartedAtRef.current ??= new Date().toISOString();
 
                 const audioCtx = outputAudioContextRef.current;
 
@@ -329,6 +446,8 @@ try {
                 const s = audioCtx.createBufferSource();
                 s.buffer = audioBuffer;
                 s.connect(audioCtx.destination);
+                // 同時送進錄音混音
+                if (recDestRef.current) s.connect(recDestRef.current);
 
                 s.addEventListener("ended", () => {
                   audioSourcesRef.current.delete(s);
@@ -370,12 +489,14 @@ try {
 });
 
 
-                const audioBase64 = audioChunksBase64Ref.current.join("") || null;
+                const userStartedAt = userStartedAtRef.current;
+                const aiStartedAt = aiStartedAtRef.current;
 
                 // reset
                 currentInputRef.current = "";
                 currentOutputRef.current = "";
-                audioChunksBase64Ref.current = [];
+                userStartedAtRef.current = null;
+                aiStartedAtRef.current = null;
                 setCurrentInput("");
                 setCurrentOutput("");
 
@@ -387,7 +508,9 @@ try {
                     body: JSON.stringify({
                       userText: fullInput,
                       aiText: fullOutput,
-                      audioBase64,
+                      userStartedAt,
+                      aiStartedAt,
+                      endedAt: timestamp,
                     }),
                   });
                 } catch (err) {
@@ -428,7 +551,7 @@ try {
         stopAudioProcessing();
       }
     }
-  }, [id, status, stopConversation, stopAudioProcessing, t.system.prompt]);
+  }, [id, status, stopConversation, stopAudioProcessing, trackUpload, t.system.prompt]);
 
   // -------------------------
   // Text 模式
@@ -570,6 +693,17 @@ try {
 
           {/* Live toggle */}
           <div className="flex flex-col items-center gap-3 mb-4">
+            <div className="flex items-center gap-6">
+            <Button
+              variant="outline"
+              className="rounded-full w-11 h-11 p-0"
+              title={t.sessionPage.whiteboard}
+              aria-label={t.sessionPage.whiteboard}
+              onClick={() => setWhiteboardOpen(true)}
+            >
+              <PenLine className="w-5 h-5" />
+            </Button>
+
             <Button
               size="lg"
               disabled={isProcessing}
@@ -589,6 +723,28 @@ try {
               )}
             </Button>
 
+            <Button
+              variant="outline"
+              className="rounded-full w-11 h-11 p-0"
+              title={t.sessionPage.uploadImage}
+              aria-label={t.sessionPage.uploadImage}
+              onClick={() => imageInputRef.current?.click()}
+            >
+              <ImagePlus className="w-5 h-5" />
+            </Button>
+            <input
+              ref={imageInputRef}
+              type="file"
+              accept={Object.keys(ASSET_RULES.IMAGE.types).join(",")}
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                e.target.value = "";
+                if (file) void handleImageSelected(file);
+              }}
+            />
+            </div>
+
             <span className="text-xs text-gray-500">
               {status === "connected"
                 ? t.sessionPage.liveStatus.connected
@@ -597,6 +753,19 @@ try {
                 : status === "error"
                 ? t.sessionPage.liveStatus.error
                 : t.sessionPage.liveStatus.idle}
+            </span>
+
+            <span className="text-xs text-gray-400">
+              {pendingUploads > 0 ? (
+                <span className="inline-flex items-center gap-1.5">
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                  {t.sessionPage.uploading}
+                </span>
+              ) : uploadNotice ? (
+                <span className="text-red-500">{uploadNotice}</span>
+              ) : (
+                t.sessionPage.recordingNotice
+              )}
             </span>
           </div>
 
@@ -625,6 +794,15 @@ try {
           </div> */}
         </div>
       </footer>
+
+      {whiteboardOpen && (
+        <Whiteboard
+          sessionId={id}
+          audioStream={mixStream}
+          onFrame={status === "connected" ? sendImageToAI : undefined}
+          onClose={() => setWhiteboardOpen(false)}
+        />
+      )}
     </div>
   );
 }

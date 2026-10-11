@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { GoogleGenAI } from "@google/genai";
+import { requireOwnedSession } from "@/lib/guards";
 
 export const runtime = "nodejs";
 
@@ -19,6 +20,8 @@ export async function GET(
   context: { params: Promise<{ id: string }> }
 ) {
   const { id: sessionId } = await context.params;
+  const guard = await requireOwnedSession(sessionId);
+  if (!guard.ok) return guard.response;
 
   // 找最新未處理的 user turn
   const lastUserTurn = await prisma.turn.findFirst({

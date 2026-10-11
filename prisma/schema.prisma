@@ -3,15 +3,18 @@ generator client {
 }
 
 datasource db {
-  provider = "mongodb"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  // Supabase pooler（transaction mode, port 6543, ?pgbouncer=true）→ 應用程式連線
+  url       = env("DATABASE_URL")
+  // Supabase direct / session mode（port 5432）→ prisma migrate 用
+  directUrl = env("DIRECT_URL")
 }
 
 /// ------------------------------
 /// User（多使用者）
 /// ------------------------------
 model User {
-  id             String    @id @default(auto()) @map("_id") @db.ObjectId
+  id             String    @id @default(cuid())
   name           String?
   email          String    @unique
   emailVerified  DateTime?
@@ -21,16 +24,16 @@ model User {
 
   accounts       Account[]
   sessions       Session[]
-  onboardingCompleted Boolean @default(false) 
+  onboardingCompleted Boolean @default(false)
 }
 
 /// ------------------------------
 /// OAuth Account（NextAuth 用）
 /// ------------------------------
 model Account {
-  id                 String   @id @default(auto()) @map("_id") @db.ObjectId
-  userId             String   @db.ObjectId
-  user               User     @relation(fields: [userId], references: [id])
+  id                 String   @id @default(cuid())
+  userId             String
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   provider           String
   providerAccountId  String
@@ -46,37 +49,88 @@ model Account {
 
   // Unique constraint (provider + providerAccountId) → 多平台登入避免重複
   @@unique([provider, providerAccountId])
+  @@index([userId])
 }
 
 /// ------------------------------
 /// Life Story Session（訪談 Session）
 /// ------------------------------
 model Session {
-  id        String    @id @default(auto()) @map("_id") @db.ObjectId
-  userId    String    @db.ObjectId
-  user      User      @relation(fields: [userId], references: [id])
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   title     String?
   createdAt DateTime  @default(now())
 
-  // ⭐ 建議改為 JSON（MongoDB 原生 json） → 不需 string
   summary   Json?
 
   turns     Turn[]
+  assets    Asset[]
+
+  @@index([userId, createdAt])
 }
 
 /// ------------------------------
 /// Turn（訪談逐字稿）
 /// ------------------------------
 model Turn {
-  id          String    @id @default(auto()) @map("_id") @db.ObjectId
+  id          String    @id @default(cuid())
 
-  sessionId   String    @db.ObjectId
-  session     Session   @relation(fields: [sessionId], references: [id])
+  sessionId   String
+  session     Session   @relation(fields: [sessionId], references: [id], onDelete: Cascade)
 
-  speaker     String    // "user" | "model"
+  speaker     String    // "user" | "assistant"
   text        String
-  audioBase64 String?
   replied     Boolean   @default(false)
   createdAt   DateTime  @default(now())
+
+  // 這句話實際開始 / 結束的時間 → 用來對回錄音檔的位置
+  startedAt   DateTime?
+  endedAt     DateTime?
+
+  @@index([sessionId, createdAt])
+}
+
+/// ------------------------------
+/// Asset（存在 Cloudflare R2 的素材；DB 只放 metadata）
+/// ------------------------------
+enum AssetKind {
+  INTERVIEW_AUDIO      // 訪談錄音（受訪者 + AI 混音，分段）
+  WHITEBOARD_VIDEO     // 白板繪製過程 + 解說音訊
+  WHITEBOARD_SNAPSHOT  // 白板完成圖（PNG）
+  WHITEBOARD_STROKES   // 白板筆畫資料（JSON，可重新算圖）
+  IMAGE                // 受訪者上傳的圖片
+}
+
+enum AssetStatus {
+  PENDING  // 已發出上傳網址，尚未確認檔案存在
+  READY
+}
+
+model Asset {
+  id          String      @id @default(cuid())
+
+  sessionId   String
+  session     Session     @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  kind        AssetKind
+  status      AssetStatus @default(PENDING)
+
+  objectKey   String      @unique
+  contentType String
+  sizeBytes   Int?
+  durationMs  Int?
+
+  // 錄製開始的時間 → 在逐字稿時間軸上的位置
+  startedAt   DateTime?
+  // 同一次錄音的各分段、或同一張白板的影片 / 完成圖 / 筆畫，共用一個 groupId
+  groupId     String?
+  seq         Int?
+  title       String?
+
+  createdAt   DateTime    @default(now())
+
+  @@index([sessionId, kind, startedAt])
+  @@index([groupId])
 }

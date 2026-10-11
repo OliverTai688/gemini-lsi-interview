@@ -46,7 +46,33 @@ export default {
       connecting: "Connecting...",
       error: "Error occurred. Tap to retry",
       idle: "Tap to start live interview"
-    }
+    },
+
+    whiteboard: "Whiteboard",
+    uploadImage: "Upload image",
+    recordingNotice: "The interview is recorded and stored while it is live",
+    uploading: "Uploading media…",
+    uploadFailed: "Some media failed to upload",
+    imageInvalid: "Only JPG / PNG / WebP / GIF images up to 15MB are supported",
+  },
+
+  whiteboard: {
+    title: "Whiteboard",
+    titlePlaceholder: "Title (optional)",
+    recording: "Recording",
+    noMic: "Microphone unavailable — the video will have no sound",
+    aiWatching: "The AI interviewer can see the whiteboard",
+    pen: "Pen",
+    eraser: "Eraser",
+    undo: "Undo",
+    clear: "Clear",
+    insertImage: "Insert image",
+    finish: "Finish & save",
+    discard: "Discard",
+    discardConfirm: "Discard this whiteboard recording?",
+    saving: "Saving…",
+    saveFailed: "Save failed",
+    retry: "Retry",
   },
 
   summaryPage: {
@@ -93,6 +119,12 @@ export default {
     ai: "AI Interviewer",
 
     end: "End of transcript",
+
+    recording: "Interview recording",
+    playFromHere: "Play from here",
+    whiteboard: "Whiteboard",
+    image: "Image",
+    download: "Download",
   }
 
 };

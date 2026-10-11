@@ -2,6 +2,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { GoogleGenAI } from "@google/genai";
+import { requireOwnedSession } from "@/lib/guards";
 
 export const runtime = "nodejs";
 
@@ -18,6 +19,8 @@ const FILE_UPLOAD_URL =
 export async function GET(req: Request, context: any) {
   const params = await context.params;
   const sessionId = params.id;
+  const guard = await requireOwnedSession(sessionId);
+  if (!guard.ok) return guard.response;
 
   try {
     const session = await prisma.session.findUnique({
@@ -38,6 +41,7 @@ export async function GET(req: Request, context: any) {
       role: t.speaker === "user" ? "user" : "model",   // 👈 修正
       content: t.text,
       timestamp: t.createdAt.toISOString(),
+      startedAt: t.startedAt?.toISOString() ?? null,
     }));
 
     return NextResponse.json({
@@ -77,6 +81,8 @@ async function uploadToGemini(file: File, apiKey: string) {
 // -------------------------
 export async function POST(req: Request, context: any) {
   const { id: sessionId } = await context.params;
+  const guard = await requireOwnedSession(sessionId);
+  if (!guard.ok) return guard.response;
 
   const contentType = req.headers.get("content-type") || "";
   let userText = "";

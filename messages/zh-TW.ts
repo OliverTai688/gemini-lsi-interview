@@ -46,7 +46,33 @@ export default {
       connecting: "連線中...",
       error: "發生錯誤，點擊重新連線",
       idle: "點擊開始語音訪談"
-    }
+    },
+
+    whiteboard: "白板說明",
+    uploadImage: "上傳圖片",
+    recordingNotice: "訪談進行時會全程錄音並儲存",
+    uploading: "素材上傳中…",
+    uploadFailed: "部分素材上傳失敗",
+    imageInvalid: "僅支援 15MB 以內的 JPG / PNG / WebP / GIF 圖片",
+  },
+
+  whiteboard: {
+    title: "白板說明",
+    titlePlaceholder: "標題（選填）",
+    recording: "錄製中",
+    noMic: "無法取得麥克風，影片將沒有聲音",
+    aiWatching: "AI 訪談員看得到白板",
+    pen: "畫筆",
+    eraser: "橡皮擦",
+    undo: "復原",
+    clear: "清空",
+    insertImage: "插入圖片",
+    finish: "完成並儲存",
+    discard: "捨棄",
+    discardConfirm: "確定要捨棄這段白板錄製嗎？",
+    saving: "儲存中…",
+    saveFailed: "儲存失敗",
+    retry: "重試",
   },
 
   summaryPage: {
@@ -93,6 +119,12 @@ export default {
     ai: "AI 訪談員",
 
     end: "逐字稿結束",
+
+    recording: "訪談錄音",
+    playFromHere: "從這裡播放",
+    whiteboard: "白板說明",
+    image: "圖片",
+    download: "下載",
   }
 
 };

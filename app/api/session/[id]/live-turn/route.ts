@@ -1,20 +1,32 @@
 // app/api/session/[id]/live-turn/route.ts
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { requireOwnedSession } from "@/lib/guards";
 
 export const runtime = "nodejs";
 
 type LiveTurnBody = {
   userText: string;
   aiText: string;
-  audioBase64?: string | null;
+  // 這一回合各自開始說話、以及回合結束的時間（ISO）→ 對回錄音位置
+  userStartedAt?: string | null;
+  aiStartedAt?: string | null;
+  endedAt?: string | null;
 };
+
+function toDate(v?: string | null) {
+  if (!v) return null;
+  const d = new Date(v);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
 
 export async function POST(
   req: Request,
   context: { params: Promise<{ id: string }> }
 ) {
   const { id: sessionId } = await context.params;
+  const guard = await requireOwnedSession(sessionId);
+  if (!guard.ok) return guard.response;
 
   try {
     const body = (await req.json()) as LiveTurnBody;
@@ -28,6 +40,12 @@ export async function POST(
       );
     }
 
+    const userStartedAt = toDate(body.userStartedAt);
+    const aiStartedAt = toDate(body.aiStartedAt);
+    const endedAt = toDate(body.endedAt);
+    // 兩筆的 createdAt 錯開 1ms，確保逐字稿排序時 user 在前
+    const now = Date.now();
+
     // --- user turn ---
     let userTurnId: string | null = null;
     if (userText) {
@@ -37,6 +55,9 @@ export async function POST(
           speaker: "user",
           text: userText,
           replied: true,
+          createdAt: new Date(now),
+          startedAt: userStartedAt,
+          endedAt: aiStartedAt ?? endedAt,
         },
       });
       userTurnId = userTurn.id;
@@ -50,8 +71,10 @@ export async function POST(
           sessionId,
           speaker: "assistant",
           text: aiText,
-          audioBase64: body.audioBase64 ?? null,
           replied: true,
+          createdAt: new Date(now + 1),
+          startedAt: aiStartedAt,
+          endedAt,
         },
       });
       aiTurnId = aiTurn.id;

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import OpenAI from "openai";
+import { requireOwnedSession } from "@/lib/guards";
 
 export const runtime = "nodejs";
 
@@ -18,11 +19,13 @@ function extractJson(raw: string) {
 export async function POST(req: Request, context: any) {
     const { id } = await context.params;
     const sessionId = id;
+    const guard = await requireOwnedSession(sessionId);
+    if (!guard.ok) return guard.response;
 
     try {
         const session = await prisma.session.findUnique({
             where: { id: sessionId },
-            include: { turns: true },
+            include: { turns: { orderBy: { createdAt: "asc" } } },
         });
 
         if (!session) {
@@ -151,6 +154,8 @@ ${transcript}
 export async function GET(req: Request, context: any) {
     const { id } = await context.params;
     const sessionId = id;
+    const guard = await requireOwnedSession(sessionId);
+    if (!guard.ok) return guard.response;
 
     try {
         const session = await prisma.session.findUnique({
