@@ -3,6 +3,7 @@
 import OpenAI from "openai";
 import { prisma } from "@/lib/prisma";
 import { INTERVIEW_STEPS, stepIndex } from "@/lib/interview-script";
+import { PROGRESS_MODEL } from "@/lib/models";
 
 const RECENT_TURNS = 8;
 
@@ -35,7 +36,7 @@ ${dialogue}`;
 
     const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
     const response = await client.responses.create({
-      model: "gpt-4o-mini",
+      model: PROGRESS_MODEL,
       input: prompt,
     });
 

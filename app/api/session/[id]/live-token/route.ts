@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { GoogleGenAI } from "@google/genai";
 import { requireOwnedSession } from "@/lib/guards";
 import { prisma } from "@/lib/prisma";
+import { LIVE_API_VERSION, LIVE_MODEL } from "@/lib/models";
 
 export const runtime = "nodejs";
 
@@ -24,10 +25,9 @@ export async function POST(
   if (!guard.ok) return guard.response;
 
   try {
-    // Ephemeral token 目前只在 v1alpha 提供
     const ai = new GoogleGenAI({
       apiKey: process.env.GOOGLE_API_KEY!,
-      httpOptions: { apiVersion: "v1alpha" },
+      ...(LIVE_API_VERSION && { httpOptions: { apiVersion: LIVE_API_VERSION } }),
     });
 
     const now = Date.now();
@@ -50,7 +50,12 @@ export async function POST(
       });
     }
 
-    return NextResponse.json({ token: token.name });
+    // 模型與 API 版本由 server 決定，瀏覽器照著用
+    return NextResponse.json({
+      token: token.name,
+      model: LIVE_MODEL,
+      apiVersion: LIVE_API_VERSION ?? null,
+    });
   } catch (err) {
     console.error("POST /live-token error:", err);
     return NextResponse.json(

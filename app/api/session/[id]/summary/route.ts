@@ -4,6 +4,7 @@ import OpenAI from "openai";
 import { requireAdmin, requireOwnedSession } from "@/lib/guards";
 import { presignRead } from "@/lib/r2";
 import { logAdmin } from "@/lib/admin-log";
+import { SUMMARY_MODEL } from "@/lib/models";
 
 // 一次總結最多附幾張白板完成圖
 const MAX_WHITEBOARDS = 8;
@@ -21,7 +22,8 @@ function extractJson(raw: string) {
 }
 
 // ---------- POST ----------
-export const maxDuration = 120;
+// 較強的模型處理長逐字稿需要比較久
+export const maxDuration = 300;
 
 export async function POST(
     req: Request,
@@ -162,7 +164,7 @@ ${transcript}
         `;
 
         const response = await client.responses.create({
-            model: "gpt-4o-mini",
+            model: SUMMARY_MODEL,
             input:
                 whiteboardImages.length > 0
                     ? [

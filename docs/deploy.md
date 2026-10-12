@@ -58,6 +58,19 @@ push / PR ──▶ GitHub Actions（.github/workflows/ci.yml）
 - 建議在 GitHub 的 branch protection 把 `CI / check` 設為合併到 main 的必要條件。
 - 新增資料表時，migration 裡要加 `ALTER TABLE "<表名>" ENABLE ROW LEVEL SECURITY;`，否則 CI 會擋下來。
 
+### 模型
+
+| 用途 | 預設 | 環境變數 |
+|---|---|---|
+| 語音訪談員 | `gemini-3.8-live` | `GEMINI_LIVE_MODEL` |
+| 訪談總結（每場一次） | `gpt-6.1-sol` | `OPENAI_SUMMARY_MODEL` |
+| 進度判斷（每回合一次） | `gpt-6-luna` | `OPENAI_PROGRESS_MODEL` |
+
+換型號只要改環境變數並重新部署。型號會被供應商下架，預設值若失效，先在這裡覆蓋。
+
+語音連線被拒時可以試著設 `GEMINI_LIVE_API_VERSION=v1alpha`：官方文件目前要求短效 token 使用預設版本（v1beta），
+但 SDK 內仍留有舊版只支援 v1alpha 的說明，這個變數是兩者不一致時的退路。
+
 ### 合併錄音（ffmpeg）
 
 素材庫的「合併成單一檔案」會在伺服器上執行 ffmpeg。執行檔來自 `ffmpeg-static` 套件，

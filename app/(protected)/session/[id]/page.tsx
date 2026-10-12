@@ -398,15 +398,19 @@ export default function LiveInterviewPage() {
           setStatus("error");
           return;
         }
-        const { token } = (await tokenRes.json()) as { token: string };
+        const live = (await tokenRes.json()) as {
+          token: string;
+          model: string;
+          apiVersion: string | null;
+        };
 
         const ai = new GoogleGenAI({
-          apiKey: token,
-          httpOptions: { apiVersion: "v1alpha" },
+          apiKey: live.token,
+          ...(live.apiVersion && { httpOptions: { apiVersion: live.apiVersion } }),
         });
 
         sessionPromiseRef.current = ai.live.connect({
-          model: "gemini-2.5-flash-native-audio-preview-09-2025",
+          model: live.model,
 
           callbacks: {
            onopen: async () => {
@@ -502,7 +506,7 @@ try {
     const pcmBlob = createBlob(inputData);
 
     sessionPromiseRef.current?.then((session) => {
-      session.sendRealtimeInput({ media: pcmBlob });
+      session.sendRealtimeInput({ audio: pcmBlob });
     });
   };
 
