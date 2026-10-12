@@ -24,6 +24,8 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
+import { useRouter } from "next/navigation";
+import { useSession } from "next-auth/react";
 import LanguageSwitcher from "@/components/LanguageSwitcher";
 import { useLanguage } from "@/context/LanguageContext";
 
@@ -39,6 +41,11 @@ type SessionType = {
 export default function HomePage() {
   const { t } = useLanguage();
   const text = t.home; // 🔥 建議建立捷徑，避免 t.home.xxx 一直寫
+
+  const router = useRouter();
+  const { data: authSession } = useSession();
+  const isGuest = !!authSession?.user?.isGuest;
+  const isAdmin = !!authSession?.user?.isAdmin;
 
   const [sessions, setSessions] = useState<SessionType[]>([]);
   const [loading, setLoading] = useState(true);
@@ -65,6 +72,13 @@ export default function HomePage() {
       setLoading(false);
     }
   };
+
+  // 受訪者（邀請連結）只有一場訪談，不需要列表 → 直接回到那一場
+  useEffect(() => {
+    if (isGuest && !loading && sessions.length > 0) {
+      router.replace(`/session/${sessions[0].id}`);
+    }
+  }, [isGuest, loading, sessions, router]);
 
   const createSession = async () => {
     if (!newSessionTitle.trim()) return;
@@ -129,7 +143,7 @@ export default function HomePage() {
     });
   };
 
-  if (loading) {
+  if (loading || (isGuest && sessions.length > 0)) {
     return (
       <div className="min-h-screen bg-white flex items-center justify-center">
         <Loader2 className="w-8 h-8 animate-spin text-gray-400" />
@@ -154,6 +168,12 @@ export default function HomePage() {
 
             <div className="flex items-center gap-3">
               <LanguageSwitcher />
+
+              {isAdmin && (
+                <Button variant="outline" onClick={() => router.push("/admin")}>
+                  {text.admin}
+                </Button>
+              )}
 
               <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
                 <DialogTrigger asChild>

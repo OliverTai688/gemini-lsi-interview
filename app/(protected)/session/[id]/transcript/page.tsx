@@ -19,6 +19,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { useParams, useRouter } from "next/navigation";
+import { useSession } from "next-auth/react";
 import { useLanguage } from "@/context/LanguageContext";
 import {
   assetTime,
@@ -45,8 +46,10 @@ type TimelineItem =
   | { type: "image"; at: number; asset: AssetDTO };
 
 type TranscriptResponse = {
-  title: string;
+  title: string | null;
   messages: TranscriptMessage[];
+  completed?: boolean;
+  isOwner?: boolean;
 };
 
 // ----------- Component -----------
@@ -63,6 +66,16 @@ export default function TranscriptPage() {
   const [copiedIndex, setCopiedIndex] = useState<number | "all" | null>(null);
 
   const [assets, setAssets] = useState<AssetDTO[]>([]);
+
+  // 管理者看別人的訪談 → 返回後台；自己的訪談 → 返回訪談頁（已結束則回完成頁）
+  const { data: authSession } = useSession();
+  const isAdmin = !!authSession?.user?.isAdmin;
+  const [viewer, setViewer] = useState({ isOwner: true, completed: false });
+  const backHref = !viewer.isOwner
+    ? "/admin"
+    : viewer.completed
+      ? `/session/${id}/done`
+      : `/session/${id}`;
   const [seekTo, setSeekTo] = useState<{ at: number; nonce: number } | null>(null);
 
   useEffect(() => {
@@ -80,7 +93,8 @@ export default function TranscriptPage() {
       const data: TranscriptResponse = await res.json();
 
       setTranscript(data.messages ?? []);
-      setSessionTitle(data.title ?? "Interview Session");
+      setSessionTitle(data.title || t.invitePage.brand);
+      setViewer({ isOwner: data.isOwner !== false, completed: !!data.completed });
 
       if (assetsRes.ok) {
         const assetData: { assets?: AssetDTO[] } = await assetsRes.json();
@@ -217,11 +231,11 @@ export default function TranscriptPage() {
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => router.push(`/session/${id}`)}
+              onClick={() => router.push(backHref)}
               className="text-gray-600 hover:text-black"
             >
               <ChevronLeft className="w-4 h-4 mr-1" />
-              {t.transcriptPage.back}
+              {viewer.isOwner ? t.transcriptPage.back : t.transcriptPage.backAdmin}
             </Button>
 
             <div className="h-6 w-px bg-gray-200" />
@@ -232,14 +246,16 @@ export default function TranscriptPage() {
             </div>
           </div>
 
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => router.push(`/session/${id}/summary`)}
-          >
-            <Sparkles className="w-4 h-4 mr-2" />
-            Summary
-          </Button>
+          {isAdmin && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => router.push(`/session/${id}/summary`)}
+            >
+              <Sparkles className="w-4 h-4 mr-2" />
+              Summary
+            </Button>
+          )}
         </div>
       </header>
 
@@ -292,11 +308,13 @@ export default function TranscriptPage() {
             <MessageSquare className="w-10 h-10 text-gray-300 mx-auto mb-4" />
             <h3 className="text-gray-900 font-light mb-2">{t.transcriptPage.noMessages}</h3>
 
-            <Button className="bg-orange-500 text-white"
-              onClick={() => router.push(`/session/${id}`)}
-            >
-              {t.transcriptPage.goInterview}
-            </Button>
+            {viewer.isOwner && (
+              <Button className="bg-orange-500 text-white"
+                onClick={() => router.push(`/session/${id}`)}
+              >
+                {t.transcriptPage.goInterview}
+              </Button>
+            )}
           </Card>
         ) : (
           <div className="space-y-0">

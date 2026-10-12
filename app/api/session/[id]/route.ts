@@ -11,7 +11,7 @@ export async function GET(
   ctx: { params: Promise<{ id: string }> }
 ) {
   const { id } = await ctx.params;
-  const guard = await requireOwnedSession(id);
+  const guard = await requireOwnedSession(id, { allowAdmin: true });
   if (!guard.ok) return guard.response;
 
   const session = await prisma.session.findUnique({
@@ -32,7 +32,7 @@ export async function DELETE(
   ctx: { params: Promise<{ id: string }> }
 ) {
   const { id } = await ctx.params;
-  const guard = await requireOwnedSession(id);
+  const guard = await requireOwnedSession(id, { allowAdmin: true });
   if (!guard.ok) return guard.response;
 
   try {

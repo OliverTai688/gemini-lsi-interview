@@ -15,7 +15,7 @@ type Ctx = { params: Promise<{ assetId: string }> };
 // -------------------------
 export async function GET(req: Request, context: Ctx) {
   const { assetId } = await context.params;
-  const guard = await requireOwnedAsset(assetId);
+  const guard = await requireOwnedAsset(assetId, { allowAdmin: true });
   if (!guard.ok) return guard.response;
 
   const { asset } = guard;
@@ -86,7 +86,7 @@ export async function PATCH(req: Request, context: Ctx) {
 // -------------------------
 export async function DELETE(req: Request, context: Ctx) {
   const { assetId } = await context.params;
-  const guard = await requireOwnedAsset(assetId);
+  const guard = await requireOwnedAsset(assetId, { allowAdmin: true });
   if (!guard.ok) return guard.response;
 
   try {

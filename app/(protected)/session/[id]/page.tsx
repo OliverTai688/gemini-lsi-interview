@@ -17,12 +17,22 @@ import {
   PenLine,
   ImagePlus,
   FolderOpen,
+  CircleCheck,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { useParams, useRouter } from "next/navigation";
+import { useSession } from "next-auth/react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import LanguageSwitcher from "@/components/LanguageSwitcher";
 import { useLanguage } from "@/context/LanguageContext";
 
@@ -30,6 +40,7 @@ import {
   GoogleGenAI,
   LiveServerMessage,
   Modality,
+  type Session,
 } from "@google/genai";
 
 import {
@@ -50,6 +61,10 @@ import ConsentDialog from "@/components/ConsentDialog";
 // 訪談錄音每 60 秒切一段上傳 → 分頁當掉最多損失最後一段
 const RECORDING_SEGMENT_MS = 60_000;
 
+// Gemini Live 的連線有時間上限，中途斷線時自動重連；連續失敗這麼多次就停下來請使用者手動再試
+const MAX_RECONNECTS = 3;
+const RECONNECT_DELAY_MS = 1500;
+
 // -------------------------
 // 型別
 // -------------------------
@@ -68,6 +83,8 @@ type TranscriptResponse = {
     content: string;
     timestamp: string;
   }[];
+  completed?: boolean;
+  isOwner?: boolean;
 };
 
 // -------------------------
@@ -75,6 +92,11 @@ export default function LiveInterviewPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const { t } = useLanguage();
+
+  // 受訪者（邀請連結）看到的是精簡版：沒有返回列表、沒有 AI 總結
+  const { data: authSession } = useSession();
+  const isGuest = !!authSession?.user?.isGuest;
+  const isAdmin = !!authSession?.user?.isAdmin;
 
   // -------------------------
   // State
@@ -98,12 +120,22 @@ export default function LiveInterviewPage() {
   const [consentOpen, setConsentOpen] = useState(false);
   const afterConsentRef = useRef<(() => void) | null>(null);
 
+  const [notFound, setNotFound] = useState(false);
+  const [endOpen, setEndOpen] = useState(false);
+  const [ending, setEnding] = useState(false);
+
+  // 使用者是否希望訪談保持連線（true 時斷線會自動重連）
+  const wantLiveRef = useRef(false);
+  const reconnectAttemptsRef = useRef(0);
+  const [reconnecting, setReconnecting] = useState(false);
+  const [reconnectNonce, setReconnectNonce] = useState(0);
+
   // -------------------------
   // Refs
   // -------------------------
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
-  const sessionPromiseRef = useRef<Promise<any> | null>(null);
+  const sessionPromiseRef = useRef<Promise<Session> | null>(null);
 
   const inputAudioContextRef = useRef<AudioContext | null>(null);
   const outputAudioContextRef = useRef<AudioContext | null>(null);
@@ -149,9 +181,24 @@ export default function LiveInterviewPage() {
     const fetchTranscript = async () => {
       try {
         const res = await fetch(`/api/session/${id}/transcript`);
+        if (res.status === 404) {
+          setNotFound(true);
+          return;
+        }
         const data: TranscriptResponse = await res.json();
 
-        setSessionTitle(data.title || t.sessionPage.startTitle);
+        // 管理者看別人的訪談 → 只能看逐字稿，不能進到訪談現場
+        if (data.isOwner === false) {
+          router.replace(`/session/${id}/transcript`);
+          return;
+        }
+        // 已結束的訪談 → 先到完成頁（那裡可以選擇繼續補充）
+        if (data.completed) {
+          router.replace(`/session/${id}/done`);
+          return;
+        }
+
+        setSessionTitle(data.title || t.invitePage.brand);
 
         const loaded =
           data.messages?.map((m) => ({
@@ -167,7 +214,7 @@ export default function LiveInterviewPage() {
     };
 
     fetchTranscript();
-  }, [id, t.sessionPage.startTitle]);
+  }, [id, router, t.invitePage.brand]);
 
   // -------------------------
   // 是否已同意錄音
@@ -309,15 +356,22 @@ export default function LiveInterviewPage() {
   // -------------------------
   // Toggle Live Session
   // -------------------------
-  const handleToggleConversation = useCallback(async () => {
+  // forceStart：自動重連時使用，不看目前的 status 直接建立連線
+  const handleToggleConversation = useCallback(async (forceStart = false) => {
     // 正在連線 → 停止
-    if (status === "connected" || status === "connecting") {
+    if (!forceStart && (status === "connected" || status === "connecting")) {
+      wantLiveRef.current = false;
       await stopConversation();
       return;
     }
 
     // idle → 建立
-    if (status === "idle" || status === "error") {
+    if (forceStart || status === "idle" || status === "error") {
+      if (sessionPromiseRef.current) return;
+
+      wantLiveRef.current = true;
+      if (!forceStart) reconnectAttemptsRef.current = 0;
+      setUploadNotice("");
       setStatus("connecting");
 
       setCurrentInput("");
@@ -335,6 +389,7 @@ export default function LiveInterviewPage() {
         if (!tokenRes.ok) {
           console.error("Failed to get live token:", tokenRes.status);
           setUploadNotice(t.sessionPage.connectFailed);
+          setReconnecting(false);
           setStatus("error");
           return;
         }
@@ -351,6 +406,7 @@ export default function LiveInterviewPage() {
           callbacks: {
            onopen: async () => {
   setStatus("connected");
+  setReconnecting(false);
 
   // --- 1) 建立 AudioContext ---
   const inCtx = new AudioContext({ sampleRate: 16000 });
@@ -387,7 +443,17 @@ try {
 
 
   // --- 3) 麥克風 Audio Pipeline ---
-  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  let stream: MediaStream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (err) {
+    // 沒有麥克風權限 → 關掉連線並告訴使用者怎麼處理
+    console.error("Microphone unavailable:", err);
+    wantLiveRef.current = false;
+    setUploadNotice(t.sessionPage.micDenied);
+    sessionPromiseRef.current?.then((session) => session.close());
+    return;
+  }
   mediaStreamRef.current = stream;
 
   // --- 4) 錄音：麥克風 + AI 語音混成一軌，分段上傳 R2 ---
@@ -526,6 +592,9 @@ try {
                 const userStartedAt = userStartedAtRef.current;
                 const aiStartedAt = aiStartedAtRef.current;
 
+                // 完成了一個回合 = 連線是健康的
+                reconnectAttemptsRef.current = 0;
+
                 // reset
                 currentInputRef.current = "";
                 currentOutputRef.current = "";
@@ -560,15 +629,31 @@ try {
               }
             },
 
-            onerror: (e: any) => {
+            onerror: (e: ErrorEvent) => {
               console.error("Live session error:", e);
               setStatus("error");
               stopAudioProcessing();
             },
 
             onclose: () => {
-              setStatus("idle");
+              sessionPromiseRef.current = null;
               stopAudioProcessing();
+
+              // 不是使用者自己停的 → 自動重連（重連時會把逐字稿帶回去接續）
+              if (
+                wantLiveRef.current &&
+                reconnectAttemptsRef.current < MAX_RECONNECTS
+              ) {
+                reconnectAttemptsRef.current += 1;
+                setReconnecting(true);
+                setStatus("connecting");
+                setReconnectNonce((n) => n + 1);
+                return;
+              }
+
+              setReconnecting(false);
+              setStatus(wantLiveRef.current ? "error" : "idle");
+              wantLiveRef.current = false;
             },
           },
 
@@ -585,7 +670,89 @@ try {
         stopAudioProcessing();
       }
     }
-  }, [id, status, stopConversation, stopAudioProcessing, trackUpload, t.system.prompt, t.sessionPage.connectFailed]);
+  }, [id, status, stopConversation, stopAudioProcessing, trackUpload, t.system.prompt, t.sessionPage.connectFailed, t.sessionPage.micDenied]);
+
+  // -------------------------
+  // 自動重連
+  // -------------------------
+  const toggleRef = useRef(handleToggleConversation);
+  useEffect(() => {
+    toggleRef.current = handleToggleConversation;
+  }, [handleToggleConversation]);
+
+  useEffect(() => {
+    if (reconnectNonce === 0) return;
+    const timer = setTimeout(() => {
+      if (wantLiveRef.current) void toggleRef.current(true);
+    }, RECONNECT_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [reconnectNonce]);
+
+  // -------------------------
+  // 離開頁面時關掉連線與麥克風
+  // -------------------------
+  useEffect(() => {
+    return () => {
+      wantLiveRef.current = false;
+      sessionPromiseRef.current
+        ?.then((session) => session.close())
+        .catch(() => {});
+      sessionPromiseRef.current = null;
+      stopAudioProcessing();
+    };
+  }, [stopAudioProcessing]);
+
+  // -------------------------
+  // 訪談進行中不要讓螢幕休眠（手機螢幕一關，麥克風就停了）
+  // -------------------------
+  useEffect(() => {
+    if (status !== "connected" || !("wakeLock" in navigator)) return;
+
+    let cancelled = false;
+    let lock: WakeLockSentinel | null = null;
+
+    const acquire = () => {
+      navigator.wakeLock
+        .request("screen")
+        .then((sentinel) => {
+          if (cancelled) void sentinel.release();
+          else lock = sentinel;
+        })
+        .catch(() => {});
+    };
+    // 切回這個分頁時要重新取得
+    const onVisible = () => {
+      if (document.visibilityState === "visible") acquire();
+    };
+
+    acquire();
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", onVisible);
+      lock?.release().catch(() => {});
+    };
+  }, [status]);
+
+  // -------------------------
+  // 結束訪談
+  // -------------------------
+  const endInterview = async () => {
+    setEnding(true);
+    try {
+      wantLiveRef.current = false;
+      await stopConversation();
+
+      const res = await fetch(`/api/session/${id}/complete`, { method: "POST" });
+      if (!res.ok) throw new Error(`Complete failed: ${res.status}`);
+
+      router.push(`/session/${id}/done`);
+    } catch (err) {
+      console.error("Failed to end interview:", err);
+      setEnding(false);
+      setEndOpen(false);
+    }
+  };
 
   // -------------------------
   // Text 模式
@@ -620,55 +787,95 @@ try {
 
   const isProcessing = status === "connecting";
 
+  if (notFound) {
+    return (
+      <div className="min-h-screen bg-white flex flex-col items-center justify-center gap-4 px-6 text-center">
+        <p className="text-gray-600">{t.sessionPage.notFound}</p>
+        {!isGuest && (
+          <Button variant="outline" onClick={() => router.push("/home")}>
+            {t.sessionPage.back}
+          </Button>
+        )}
+      </div>
+    );
+  }
+
   // -------------------------
   return (
     <div className="flex flex-col h-screen bg-white">
       {/* Header */}
       <header className="border-b border-gray-200 bg-white">
-        <div className="max-w-5xl mx-auto px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-6">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => router.push("/home")}
-              className="text-gray-600 hover:text-black"
-            >
-              <ChevronLeft className="w-4 h-4 mr-1" />
-              {t.sessionPage.back}
-            </Button>
+        <div className="max-w-5xl mx-auto px-4 sm:px-6 py-3 sm:py-4 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3 sm:gap-6 min-w-0">
+            {!isGuest && (
+              <>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => router.push("/home")}
+                  className="text-gray-600 hover:text-black"
+                >
+                  <ChevronLeft className="w-4 h-4 sm:mr-1" />
+                  <span className="hidden sm:inline">{t.sessionPage.back}</span>
+                </Button>
 
-            <div className="h-6 w-px bg-gray-200" />
+                <div className="hidden sm:block h-6 w-px bg-gray-200" />
+              </>
+            )}
 
-            <h1 className="text-lg font-light">{sessionTitle}</h1>
+            <h1 className="text-lg font-light truncate">{sessionTitle}</h1>
           </div>
 
-          <div className="flex items-center gap-3">
+          {/* 小螢幕只顯示圖示 */}
+          <div className="flex items-center gap-2 sm:gap-3 shrink-0">
             <Button
               variant="outline"
               size="sm"
+              title={t.sessionPage.materials}
+              aria-label={t.sessionPage.materials}
               onClick={() => router.push(`/session/${id}/materials`)}
             >
-              <FolderOpen className="w-4 h-4 mr-2" />
-              {t.sessionPage.materials}
+              <FolderOpen className="w-4 h-4 sm:mr-2" />
+              <span className="hidden sm:inline">{t.sessionPage.materials}</span>
             </Button>
 
             <Button
               variant="outline"
               size="sm"
+              title={t.sessionPage.fullTranscript}
+              aria-label={t.sessionPage.fullTranscript}
               onClick={() => router.push(`/session/${id}/transcript`)}
             >
-              <FileText className="w-4 h-4 mr-2" />
-              {t.sessionPage.fullTranscript}
+              <FileText className="w-4 h-4 sm:mr-2" />
+              <span className="hidden sm:inline">{t.sessionPage.fullTranscript}</span>
             </Button>
 
-            <Button
-              size="sm"
-              className="bg-orange-500 hover:bg-orange-600 text-white"
-              onClick={() => router.push(`/session/${id}/summary`)}
-            >
-              <Sparkles className="w-4 h-4 mr-2" />
-              {t.sessionPage.generateSummary}
-            </Button>
+            {/* AI 總結只給研究者 */}
+            {isAdmin && (
+              <Button
+                variant="outline"
+                size="sm"
+                title={t.sessionPage.generateSummary}
+                aria-label={t.sessionPage.generateSummary}
+                onClick={() => router.push(`/session/${id}/summary`)}
+              >
+                <Sparkles className="w-4 h-4 sm:mr-2" />
+                <span className="hidden sm:inline">{t.sessionPage.generateSummary}</span>
+              </Button>
+            )}
+
+            {messages.length > 0 && (
+              <Button
+                size="sm"
+                className="bg-orange-500 hover:bg-orange-600 text-white"
+                title={t.sessionPage.endInterview}
+                aria-label={t.sessionPage.endInterview}
+                onClick={() => setEndOpen(true)}
+              >
+                <CircleCheck className="w-4 h-4 sm:mr-2" />
+                <span className="hidden sm:inline">{t.sessionPage.endInterview}</span>
+              </Button>
+            )}
           </div>
         </div>
       </header>
@@ -797,7 +1004,9 @@ try {
               {status === "connected"
                 ? t.sessionPage.liveStatus.connected
                 : status === "connecting"
-                ? t.sessionPage.liveStatus.connecting
+                ? reconnecting
+                  ? t.sessionPage.reconnecting
+                  : t.sessionPage.liveStatus.connecting
                 : status === "error"
                 ? t.sessionPage.liveStatus.error
                 : t.sessionPage.liveStatus.idle}
@@ -842,6 +1051,34 @@ try {
           </div> */}
         </div>
       </footer>
+
+      {/* 結束訪談確認 */}
+      <Dialog open={endOpen} onOpenChange={(open) => !ending && setEndOpen(open)}>
+        <DialogContent className="bg-white border-gray-200 sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-xl font-light text-black">
+              {t.sessionPage.endConfirmTitle}
+            </DialogTitle>
+            <DialogDescription className="text-sm text-gray-600">
+              {t.sessionPage.endConfirmBody}
+            </DialogDescription>
+          </DialogHeader>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEndOpen(false)} disabled={ending}>
+              {t.sessionPage.endCancel}
+            </Button>
+            <Button
+              className="bg-orange-500 hover:bg-orange-600 text-white"
+              onClick={endInterview}
+              disabled={ending}
+            >
+              {ending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              {t.sessionPage.endConfirm}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <ConsentDialog
         open={consentOpen}

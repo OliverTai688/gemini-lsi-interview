@@ -1,13 +1,10 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { auth } from "@/lib/auth";
+import { requireUser } from "@/lib/guards";
 
 export async function POST(req: Request) {
-  const session = await auth();
-
-  if (!session?.user?.email) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const guard = await requireUser();
+  if (!guard.ok) return guard.response;
 
   const { name } = await req.json();
 
@@ -17,7 +14,7 @@ export async function POST(req: Request) {
 
   try {
     const user = await prisma.user.update({
-      where: { email: session.user.email },
+      where: { id: guard.userId },
       data: {
         name: name.trim(),
         onboardingCompleted: true,    // ⭐ 加上這個！
@@ -25,9 +22,9 @@ export async function POST(req: Request) {
     });
 
     return NextResponse.json({ user });
-  } catch (err: any) {
+  } catch (err) {
     return NextResponse.json(
-      { error: "Profile update failed", detail: err.message },
+      { error: "Profile update failed", detail: String(err) },
       { status: 500 }
     );
   }

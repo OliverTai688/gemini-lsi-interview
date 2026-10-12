@@ -93,6 +93,9 @@ const LoginPage = () => {
             <p className="text-xs text-gray-500 text-center leading-relaxed">
               登入即表示您同意我們的服務條款與隱私政策
             </p>
+            <p className="text-xs text-gray-500 text-center leading-relaxed mt-3">
+              受訪者不需要登入，請直接打開您收到的專屬連結。
+            </p>
           </div>
         </Card>
 

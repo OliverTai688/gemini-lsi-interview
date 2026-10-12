@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import OpenAI from "openai";
-import { requireOwnedSession } from "@/lib/guards";
+import { requireAdmin, requireOwnedSession } from "@/lib/guards";
 import { presignRead } from "@/lib/r2";
 
 // 一次總結最多附幾張白板完成圖
@@ -20,10 +20,18 @@ function extractJson(raw: string) {
 }
 
 // ---------- POST ----------
-export async function POST(req: Request, context: any) {
+export const maxDuration = 120;
+
+export async function POST(
+    req: Request,
+    context: { params: Promise<{ id: string }> }
+) {
     const { id } = await context.params;
     const sessionId = id;
-    const guard = await requireOwnedSession(sessionId);
+    // AI 總結只給研究者（管理者）看，受訪者本人也不行
+    const admin = await requireAdmin();
+    if (!admin.ok) return admin.response;
+    const guard = await requireOwnedSession(sessionId, { allowAdmin: true });
     if (!guard.ok) return guard.response;
 
     try {
@@ -200,10 +208,16 @@ ${transcript}
 }
 
 // ---------- GET ----------
-export async function GET(req: Request, context: any) {
+export async function GET(
+    req: Request,
+    context: { params: Promise<{ id: string }> }
+) {
     const { id } = await context.params;
     const sessionId = id;
-    const guard = await requireOwnedSession(sessionId);
+    // AI 總結只給研究者（管理者）看，受訪者本人也不行
+    const admin = await requireAdmin();
+    if (!admin.ok) return admin.response;
+    const guard = await requireOwnedSession(sessionId, { allowAdmin: true });
     if (!guard.ok) return guard.response;
 
     try {
@@ -220,6 +234,7 @@ export async function GET(req: Request, context: any) {
             sessionId,
             summary: session.summary,  // ← Already JSON
             session_title: session.title,
+            isOwner: guard.isOwner,
         });
     } catch (err) {
         return NextResponse.json(

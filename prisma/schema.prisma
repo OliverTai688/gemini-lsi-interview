@@ -16,7 +16,8 @@ datasource db {
 model User {
   id             String    @id @default(cuid())
   name           String?
-  email          String    @unique
+  // 用邀請連結進來的受訪者沒有 email
+  email          String?   @unique
   emailVerified  DateTime?
   image          String?
   createdAt      DateTime  @default(now())
@@ -28,6 +29,31 @@ model User {
 
   // 同意訪談錄音 / 錄影的時間；null = 尚未同意
   recordingConsentAt  DateTime?
+
+  // 有值 = 這是用邀請連結進來的受訪者
+  invite              Invite?
+}
+
+/// ------------------------------
+/// Invite（受訪者的專屬連結；一條連結對應一位受訪者）
+/// ------------------------------
+model Invite {
+  id             String    @id @default(cuid())
+
+  // 連結裡的 token 只存 sha256，資料庫外洩也無法反推出連結
+  tokenHash      String    @unique
+  // 研究者給這位受訪者的代號 / 名稱
+  label          String
+
+  userId         String    @unique
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdByEmail String?
+  createdAt      DateTime  @default(now())
+  firstOpenedAt  DateTime?
+  lastOpenedAt   DateTime?
+  // 停用後連結失效，已登入的受訪者也會被登出
+  revokedAt      DateTime?
 }
 
 /// ------------------------------
@@ -65,6 +91,8 @@ model Session {
 
   title     String?
   createdAt DateTime  @default(now())
+  // 受訪者按下「結束訪談」的時間
+  completedAt DateTime?
 
   summary   Json?
 

@@ -39,13 +39,16 @@ export default function MaterialsPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [error, setError] = useState("");
+  // 管理者看別人的訪談 → 返回後台
+  const [isOwner, setIsOwner] = useState(true);
 
   const fetchAssets = useCallback(async () => {
     try {
       const res = await fetch(`/api/session/${id}/assets`);
       if (!res.ok) throw new Error(`Fetch assets failed: ${res.status}`);
-      const data: { assets?: AssetDTO[] } = await res.json();
+      const data: { assets?: AssetDTO[]; isOwner?: boolean } = await res.json();
       setAssets(data.assets ?? []);
+      setIsOwner(data.isOwner !== false);
     } catch (err) {
       console.error("Failed to fetch assets:", err);
     } finally {
@@ -112,11 +115,11 @@ export default function MaterialsPage() {
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => router.push(`/session/${id}`)}
+            onClick={() => router.push(isOwner ? `/session/${id}` : "/admin")}
             className="text-gray-600 hover:text-black"
           >
             <ChevronLeft className="w-4 h-4 mr-1" />
-            {text.back}
+            {isOwner ? text.back : t.transcriptPage.backAdmin}
           </Button>
 
           <div className="h-6 w-px bg-gray-200" />

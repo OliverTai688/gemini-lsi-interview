@@ -95,7 +95,7 @@ export async function GET(
   context: { params: Promise<{ id: string }> }
 ) {
   const { id: sessionId } = await context.params;
-  const guard = await requireOwnedSession(sessionId);
+  const guard = await requireOwnedSession(sessionId, { allowAdmin: true });
   if (!guard.ok) return guard.response;
 
   const assets = await prisma.asset.findMany({
@@ -117,5 +117,5 @@ export async function GET(
     createdAt: a.createdAt.toISOString(),
   }));
 
-  return NextResponse.json({ assets: result });
+  return NextResponse.json({ assets: result, isOwner: guard.isOwner });
 }

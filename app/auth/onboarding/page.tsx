@@ -90,8 +90,8 @@ const OnboardingPage = () => {
 
       router.push('/');
       router.refresh();
-    } catch (err: any) {
-      setError(err.message || '發生錯誤，請稍後再試');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '發生錯誤，請稍後再試');
       setIsLoading(false);
     }
   };
