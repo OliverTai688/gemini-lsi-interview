@@ -42,11 +42,8 @@ import {
   type Session,
 } from "@google/genai";
 
-import {
-  createBlob,
-  decode,
-  decodeAudioData,
-} from "@/lib/audio-utils";
+import { createBlob } from "@/lib/audio-utils";
+import { LiveAudioEngine } from "@/lib/live-audio";
 import { ASSET_RULES, baseMime } from "@/lib/assets";
 import { uploadAsset } from "@/lib/asset-upload";
 import { toJpegBase64 } from "@/lib/image-utils";
@@ -148,21 +145,13 @@ export default function LiveInterviewPage() {
 
   const sessionPromiseRef = useRef<Promise<Session> | null>(null);
 
-  const inputAudioContextRef = useRef<AudioContext | null>(null);
-  const outputAudioContextRef = useRef<AudioContext | null>(null);
-
-  const scriptProcessorRef = useRef<ScriptProcessorNode | null>(null);
-  const mediaStreamSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
-  const mediaStreamRef = useRef<MediaStream | null>(null);
-
-  const nextStartTimeRef = useRef<number>(0);
-  const audioSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
+  // 收音、播放、錄音混音（見 lib/live-audio.ts）
+  const [audio] = useState(() => new LiveAudioEngine());
 
   const currentInputRef = useRef("");
   const currentOutputRef = useRef("");
   const messagesRef = useRef<ChatMessage[]>([]);
 
-  const recDestRef = useRef<MediaStreamAudioDestinationNode | null>(null);
   const recorderRef = useRef<SegmentedRecorder | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -308,37 +297,10 @@ export default function LiveInterviewPage() {
     // 先停錄音（最後一段會在背景上傳），再關音軌
     void recorderRef.current?.stop();
     recorderRef.current = null;
-    recDestRef.current = null;
     setMixStream(null);
 
-    if (mediaStreamRef.current) {
-      mediaStreamRef.current.getTracks().forEach((track) => track.stop());
-      mediaStreamRef.current = null;
-    }
-
-    if (scriptProcessorRef.current) {
-      scriptProcessorRef.current.disconnect();
-      scriptProcessorRef.current = null;
-    }
-
-    if (mediaStreamSourceRef.current) {
-      mediaStreamSourceRef.current.disconnect();
-      mediaStreamSourceRef.current = null;
-    }
-
-    if (inputAudioContextRef.current && inputAudioContextRef.current.state !== "closed") {
-      inputAudioContextRef.current.close().catch(console.error);
-    }
-    if (outputAudioContextRef.current && outputAudioContextRef.current.state !== "closed") {
-      outputAudioContextRef.current.close().catch(console.error);
-    }
-
-    audioSourcesRef.current.forEach((s) => s.stop());
-    audioSourcesRef.current.clear();
-
-    inputAudioContextRef.current = null;
-    outputAudioContextRef.current = null;
-  }, []);
+    audio.end();
+  }, [audio]);
 
   // -------------------------
   const stopConversation = useCallback(async () => {
@@ -371,6 +333,8 @@ export default function LiveInterviewPage() {
     // idle → 建立
     if (forceStart || status === "idle" || status === "error") {
       if (sessionPromiseRef.current) return;
+
+      audio.prime();
 
       wantLiveRef.current = true;
       if (!forceStart) reconnectAttemptsRef.current = 0;
@@ -417,13 +381,8 @@ export default function LiveInterviewPage() {
   setStatus("connected");
   setReconnecting(false);
 
-  // --- 1) 建立 AudioContext ---
-  const inCtx = new AudioContext({ sampleRate: 16000 });
-  const outCtx = new AudioContext({ sampleRate: 24000 });
-
-  inputAudioContextRef.current = inCtx;
-  outputAudioContextRef.current = outCtx;
-  nextStartTimeRef.current = 0;
+  // --- 1) 這一段連線的錄音混音（麥克風 + AI 語音）---
+  const mix = audio.begin();
 
  // --- 2) 注入完整歷史（最關鍵）---
 try {
@@ -454,24 +413,41 @@ try {
   // --- 3) 麥克風 Audio Pipeline ---
   let stream: MediaStream | null = null;
   try {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    // 手機沒戴耳機時，AI 的聲音會被麥克風收進去 → 明確要求回音消除
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    });
   } catch (err) {
     // 沒有麥克風 → 連線留著，改用打字進行（AI 還是會用語音回應）
     console.error("Microphone unavailable:", err);
     setUploadNotice(t.sessionPage.micDenied);
     setTextOpen(true);
   }
-  mediaStreamRef.current = stream;
 
-  // --- 4) 錄音：麥克風 + AI 語音混成一軌，分段上傳 R2 ---
+  // 等麥克風授權的期間連線已經被關掉了 → 不要再接上去
+  if (!sessionPromiseRef.current) {
+    stream?.getTracks().forEach((track) => track.stop());
+    return;
+  }
+
+  if (stream) {
+    audio.attachMic(stream, (pcm) => {
+      sessionPromiseRef.current?.then((session) => {
+        session.sendRealtimeInput({ audio: createBlob(pcm) });
+      });
+    });
+  }
+
+  // --- 4) 錄音：分段上傳 R2 ---
   try {
-    const recDest = outCtx.createMediaStreamDestination();
-    if (stream) outCtx.createMediaStreamSource(stream).connect(recDest);
-    recDestRef.current = recDest;
-    setMixStream(recDest.stream);
+    setMixStream(mix);
 
     const recordingId = crypto.randomUUID();
-    const recorder = new SegmentedRecorder(recDest.stream, {
+    const recorder = new SegmentedRecorder(mix, {
       mimeTypes: AUDIO_MIME_TYPES,
       segmentMs: RECORDING_SEGMENT_MS,
       audioBitsPerSecond: 48_000,
@@ -492,26 +468,6 @@ try {
   } catch (err) {
     console.error("Failed to start recording:", err);
   }
-
-  if (!stream) return;
-
-  const source = inCtx.createMediaStreamSource(stream);
-  mediaStreamSourceRef.current = source;
-
-  const proc = inCtx.createScriptProcessor(4096, 1, 1);
-  scriptProcessorRef.current = proc;
-
-  proc.onaudioprocess = (e) => {
-    const inputData = e.inputBuffer.getChannelData(0);
-    const pcmBlob = createBlob(inputData);
-
-    sessionPromiseRef.current?.then((session) => {
-      session.sendRealtimeInput({ audio: pcmBlob });
-    });
-  };
-
-  source.connect(proc);
-  proc.connect(inCtx.destination);
 },
 
 
@@ -535,37 +491,10 @@ try {
               const base64Audio =
                 message.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
 
-              if (base64Audio && outputAudioContextRef.current) {
+              if (base64Audio) {
                 aiStartedAtRef.current ??= new Date().toISOString();
-
-                const audioCtx = outputAudioContextRef.current;
-
-                nextStartTimeRef.current = Math.max(
-                  nextStartTimeRef.current,
-                  audioCtx.currentTime
-                );
-
-                const audioBuffer = await decodeAudioData(
-                  decode(base64Audio),
-                  audioCtx,
-                  24000,
-                  1
-                );
-
-                const s = audioCtx.createBufferSource();
-                s.buffer = audioBuffer;
-                s.connect(audioCtx.destination);
-                // 同時送進錄音混音
-                if (recDestRef.current) s.connect(recDestRef.current);
-
-                s.addEventListener("ended", () => {
-                  audioSourcesRef.current.delete(s);
-                });
-
-                s.start(nextStartTimeRef.current);
-                nextStartTimeRef.current += audioBuffer.duration;
-
-                audioSourcesRef.current.add(s);
+                // 從喇叭播出，同時送進錄音混音
+                audio.play(base64Audio);
               }
 
               // 回合結束
@@ -651,9 +580,7 @@ try {
 
               // 模型被打斷 → 停止所有正在播放
               if (message.serverContent?.interrupted) {
-                audioSourcesRef.current.forEach((s) => s.stop());
-                audioSourcesRef.current.clear();
-                nextStartTimeRef.current = 0;
+                audio.interrupt();
               }
             },
 
@@ -698,7 +625,7 @@ try {
         stopAudioProcessing();
       }
     }
-  }, [id, clientId, status, stopConversation, stopAudioProcessing, trackUpload, t.system.prompt, t.sessionPage.connectFailed, t.sessionPage.micDenied, t.sessionPage.superseded]);
+  }, [id, clientId, audio, status, stopConversation, stopAudioProcessing, trackUpload, t.system.prompt, t.sessionPage.connectFailed, t.sessionPage.micDenied, t.sessionPage.superseded]);
 
   // -------------------------
   // 自動重連
@@ -727,8 +654,20 @@ try {
         .catch(() => {});
       sessionPromiseRef.current = null;
       stopAudioProcessing();
+      audio.dispose();
     };
-  }, [stopAudioProcessing]);
+  }, [audio, stopAudioProcessing]);
+
+  // -------------------------
+  // 接電話、切換 App 之後系統會暫停音訊 → 回到這一頁時恢復
+  // -------------------------
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === "visible") audio.resumeIfNeeded();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [audio]);
 
   // -------------------------
   // 訪談進行中不要讓螢幕休眠（手機螢幕一關，麥克風就停了）
@@ -990,12 +929,16 @@ try {
             <Button
               size="lg"
               disabled={isProcessing}
-              onClick={() =>
+              onClick={() => {
                 // 停止不需要同意；開始錄之前才需要
-                status === "connected"
-                  ? handleToggleConversation()
-                  : withConsent(() => void handleToggleConversation())
-              }
+                if (status === "connected") {
+                  void handleToggleConversation();
+                  return;
+                }
+                // iOS 只允許在點擊的當下啟動音訊，所以要趕在任何等待（同意、取 token、連線）之前
+                audio.prime();
+                withConsent(() => void handleToggleConversation());
+              }}
               className={`rounded-full w-16 h-16 shadow-lg transition-all active:scale-95 ${
                 status === "connected"
                   ? "bg-red-500 animate-pulse"
