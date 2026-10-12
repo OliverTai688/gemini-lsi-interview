@@ -2,6 +2,10 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import OpenAI from "openai";
 import { requireOwnedSession } from "@/lib/guards";
+import { presignRead } from "@/lib/r2";
+
+// 一次總結最多附幾張白板完成圖
+const MAX_WHITEBOARDS = 8;
 
 export const runtime = "nodejs";
 
@@ -39,9 +43,38 @@ export async function POST(req: Request, context: any) {
             );
         }
 
-        const transcript = session.turns
-            .map((t) => `${t.speaker}: ${t.text}`)
-            .join("\n");
+        // 白板說明：依時間插進逐字稿，完成圖另外以圖片附給模型
+        const whiteboards = await prisma.asset.findMany({
+            where: { sessionId, kind: "WHITEBOARD_SNAPSHOT", status: "READY" },
+            orderBy: { startedAt: "asc" },
+            take: MAX_WHITEBOARDS,
+        });
+        const whiteboardImages = await Promise.all(
+            whiteboards.map((w) => presignRead(w.objectKey))
+        );
+
+        const lines = [
+            ...session.turns.map((t) => ({
+                at: t.createdAt.getTime(),
+                line: `${t.speaker}: ${t.text}`,
+            })),
+            ...whiteboards.map((w, i) => ({
+                at: (w.startedAt ?? w.createdAt).getTime(),
+                line: `[白板說明 #${i + 1}${w.title ? `：${w.title}` : ""}｜受訪者在此時畫了白板，內容見第 ${i + 1} 張附圖]`,
+            })),
+        ].sort((a, b) => a.at - b.at);
+
+        const transcript = lines.map((l) => l.line).join("\n");
+
+        const whiteboardNote =
+            whiteboards.length > 0
+                ? `
+⚠️【白板附圖】
+本次訪談附有 ${whiteboards.length} 張受訪者親手繪製的白板完成圖，依序對應逐字稿中的 [白板說明 #n] 標記。
+白板上的文字與圖像視同受訪者的敘述，可以作為分析依據；
+但只能描述圖中實際看得到的內容，看不清楚或無法判讀的部分不得臆測。
+`
+                : "";
 
         const prompt = `
         你是一位熟悉敘事心理學（Narrative Identity）、生命故事訪談（Life Story Interview; McAdams, 1996），
@@ -113,6 +146,7 @@ export async function POST(req: Request, context: any) {
   ]
 }
 
+${whiteboardNote}
 以下是逐字稿：
 ${transcript}
 
@@ -120,7 +154,22 @@ ${transcript}
 
         const response = await client.responses.create({
             model: "gpt-4o-mini",
-            input: prompt,
+            input:
+                whiteboardImages.length > 0
+                    ? [
+                          {
+                              role: "user",
+                              content: [
+                                  { type: "input_text", text: prompt },
+                                  ...whiteboardImages.map((image_url) => ({
+                                      type: "input_image" as const,
+                                      image_url,
+                                      detail: "high" as const,
+                                  })),
+                              ],
+                          },
+                      ]
+                    : prompt,
         });
 
         const rawText = response.output_text ?? "";

@@ -29,6 +29,16 @@ export default {
       untitled: "Untitled AI Interview",
       justNow: "Just now",
       messages: "messages",
+    },
+
+    deleteDialog: {
+      button: "Delete interview",
+      title: "Delete this interview?",
+      description: "The transcript, summary, recordings, whiteboard videos and images will all be deleted. This cannot be undone.",
+      confirm: "Delete permanently",
+      cancel: "Cancel",
+      deleting: "Deleting...",
+      failed: "Delete failed, please try again",
     }
   },
 
@@ -49,11 +59,43 @@ export default {
     },
 
     whiteboard: "Whiteboard",
+    materials: "Materials",
+    connectFailed: "Could not start the voice connection. Please try again later",
     uploadImage: "Upload image",
     recordingNotice: "The interview is recorded and stored while it is live",
     uploading: "Uploading media…",
     uploadFailed: "Some media failed to upload",
     imageInvalid: "Only JPG / PNG / WebP / GIF images up to 15MB are supported",
+  },
+
+  consent: {
+    title: "Before you start: recording",
+    items: [
+      "During a live interview, the voices of you and the AI interviewer are recorded throughout.",
+      "When you use the whiteboard, the drawing process and your explanation are recorded as a video.",
+      "Recordings, videos, images and transcripts are stored in this service's cloud storage.",
+      "Conversation content is sent to AI services (Google Gemini, OpenAI) to run the interview and generate summaries.",
+      "You can delete an interview from the interview list at any time; its recordings and media are deleted with it.",
+    ],
+    agree: "I understand and agree",
+    cancel: "Not now",
+    failed: "Could not record your consent, please try again",
+  },
+
+  materialsPage: {
+    back: "Back to Session",
+    title: "Materials",
+    empty: "This interview has no materials yet",
+    whiteboards: "Whiteboards",
+    images: "Images",
+    recording: "Interview recording",
+    segment: "Part {n}",
+    downloadVideo: "Download video",
+    downloadImage: "Download image",
+    download: "Download",
+    delete: "Delete",
+    deleteConfirm: "Delete this item? This cannot be undone.",
+    deleteFailed: "Delete failed, please try again",
   },
 
   whiteboard: {

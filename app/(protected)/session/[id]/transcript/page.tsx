@@ -20,7 +20,12 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { useParams, useRouter } from "next/navigation";
 import { useLanguage } from "@/context/LanguageContext";
-import type { AssetDTO } from "@/lib/assets";
+import {
+  assetTime,
+  groupWhiteboardClips,
+  type AssetDTO,
+  type WhiteboardClip,
+} from "@/lib/assets";
 import SessionAudioPlayer, {
   locateInSegments,
 } from "@/components/SessionAudioPlayer";
@@ -33,20 +38,11 @@ type TranscriptMessage = {
   startedAt?: string | null;
 };
 
-// 一次白板說明 = 影片 + 完成圖（同一個 groupId）
-type WhiteboardClip = {
-  video?: AssetDTO;
-  snapshot?: AssetDTO;
-  title: string | null;
-};
-
 // 逐字稿時間軸上的項目：訊息、白板說明、上傳的圖片
 type TimelineItem =
   | { type: "message"; at: number; message: TranscriptMessage; index: number }
-  | { type: "whiteboard"; at: number; clip: WhiteboardClip; key: string }
+  | { type: "whiteboard"; at: number; clip: WhiteboardClip }
   | { type: "image"; at: number; asset: AssetDTO };
-
-const assetTime = (a: AssetDTO) => Date.parse(a.startedAt ?? a.createdAt);
 
 type TranscriptResponse = {
   title: string;
@@ -111,26 +107,14 @@ export default function TranscriptPage() {
       index,
     }));
 
-    const clips = new Map<string, { at: number; clip: WhiteboardClip }>();
     for (const a of assets) {
       if (a.kind === "IMAGE" && !a.groupId) {
         items.push({ type: "image", at: assetTime(a), asset: a });
-        continue;
       }
-      if (a.kind !== "WHITEBOARD_VIDEO" && a.kind !== "WHITEBOARD_SNAPSHOT") continue;
-
-      const key = a.groupId ?? a.id;
-      const entry = clips.get(key) ?? {
-        at: assetTime(a),
-        clip: { title: a.title },
-      };
-      if (a.kind === "WHITEBOARD_VIDEO") entry.clip.video = a;
-      else entry.clip.snapshot = a;
-      clips.set(key, entry);
     }
-    clips.forEach(({ at, clip }, key) =>
-      items.push({ type: "whiteboard", at, clip, key })
-    );
+    for (const clip of groupWhiteboardClips(assets)) {
+      items.push({ type: "whiteboard", at: clip.at, clip });
+    }
 
     return items.sort((a, b) => a.at - b.at);
   }, [transcript, assets]);
@@ -320,7 +304,7 @@ export default function TranscriptPage() {
               if (item.type === "whiteboard") {
                 const { video, snapshot, title } = item.clip;
                 return (
-                  <div key={`wb-${item.key}`} className="border-b py-6 px-6">
+                  <div key={`wb-${item.clip.key}`} className="border-b py-6 px-6">
                     <div className="flex items-center justify-between mb-3">
                       <div className="flex items-center gap-3">
                         <div className="w-8 h-8 rounded-full flex items-center justify-center bg-orange-100">

@@ -29,6 +29,16 @@ export default {
       untitled: "未命名 AI 訪談",
       justNow: "剛剛",
       messages: "則訊息",
+    },
+
+    deleteDialog: {
+      button: "刪除訪談",
+      title: "刪除這場訪談？",
+      description: "逐字稿、訪談總結、錄音、白板影片與圖片都會一併刪除，無法復原。",
+      confirm: "永久刪除",
+      cancel: "取消",
+      deleting: "刪除中...",
+      failed: "刪除失敗，請再試一次",
     }
   },
 
@@ -49,11 +59,43 @@ export default {
     },
 
     whiteboard: "白板說明",
+    materials: "素材庫",
+    connectFailed: "無法建立語音連線，請稍後再試",
     uploadImage: "上傳圖片",
     recordingNotice: "訪談進行時會全程錄音並儲存",
     uploading: "素材上傳中…",
     uploadFailed: "部分素材上傳失敗",
     imageInvalid: "僅支援 15MB 以內的 JPG / PNG / WebP / GIF 圖片",
+  },
+
+  consent: {
+    title: "開始前，請先了解錄音與錄影",
+    items: [
+      "語音訪談進行時，會全程錄下你與 AI 訪談員的對話聲音。",
+      "使用白板說明時，繪製過程與你的解說會錄成影片。",
+      "錄音、影片、圖片與逐字稿會儲存在本服務的雲端空間。",
+      "對話內容會傳送給 AI 服務（Google Gemini、OpenAI）以進行訪談與產生總結。",
+      "你可以隨時在訪談列表刪除整場訪談，相關錄音與素材會一併刪除。",
+    ],
+    agree: "我了解並同意",
+    cancel: "先不要",
+    failed: "無法記錄同意，請再試一次",
+  },
+
+  materialsPage: {
+    back: "返回訪談頁面",
+    title: "素材庫",
+    empty: "這場訪談還沒有任何素材",
+    whiteboards: "白板說明",
+    images: "圖片",
+    recording: "訪談錄音",
+    segment: "第 {n} 段",
+    downloadVideo: "下載影片",
+    downloadImage: "下載圖片",
+    download: "下載",
+    delete: "刪除",
+    deleteConfirm: "確定要刪除這個素材嗎？刪除後無法復原。",
+    deleteFailed: "刪除失敗，請再試一次",
   },
 
   whiteboard: {

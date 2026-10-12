@@ -67,3 +67,43 @@ export type AssetDTO = {
   title: string | null;
   createdAt: string;
 };
+
+/** 一次白板說明 = 影片 + 完成圖 + 筆畫（+ 插入的圖片），共用同一個 groupId */
+export type WhiteboardClip = {
+  key: string;
+  at: number; // epoch ms
+  title: string | null;
+  video?: AssetDTO;
+  snapshot?: AssetDTO;
+  strokes?: AssetDTO;
+  /** 這一組的所有素材 id（刪除整段白板時用） */
+  assetIds: string[];
+};
+
+export const assetTime = (a: AssetDTO) => Date.parse(a.startedAt ?? a.createdAt);
+
+export function groupWhiteboardClips(assets: AssetDTO[]): WhiteboardClip[] {
+  const clips = new Map<string, WhiteboardClip>();
+
+  for (const a of assets) {
+    const inGroup = a.kind !== "INTERVIEW_AUDIO" && (a.kind !== "IMAGE" || !!a.groupId);
+    if (!inGroup) continue;
+
+    const key = a.groupId ?? a.id;
+    const clip =
+      clips.get(key) ??
+      ({ key, at: assetTime(a), title: null, assetIds: [] } as WhiteboardClip);
+
+    clip.assetIds.push(a.id);
+    if (a.kind === "WHITEBOARD_VIDEO") clip.video = a;
+    if (a.kind === "WHITEBOARD_SNAPSHOT") clip.snapshot = a;
+    if (a.kind === "WHITEBOARD_STROKES") clip.strokes = a;
+    // 插入白板的圖片 title 是檔名，不拿來當白板標題
+    if (a.kind !== "IMAGE") clip.title ??= a.title;
+    clips.set(key, clip);
+  }
+
+  return [...clips.values()]
+    .filter((c) => c.video || c.snapshot)
+    .sort((a, b) => a.at - b.at);
+}

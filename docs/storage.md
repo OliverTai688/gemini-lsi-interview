@@ -75,23 +75,41 @@ MONGODB_URL="mongodb+srv://..." npx tsx scripts/migrate-mongo-to-postgres.ts
 - 可重複執行；MongoDB 上的資料不會被更動。
 - `Turn.audioBase64` 不會搬（原本的存法無法可靠還原成音檔）。
 
+## 排程：清理未完成的上傳
+
+`GET /api/cron/cleanup-assets` 會刪掉超過 24 小時仍是 `PENDING` 的素材（資料列與 R2 上的檔案）。
+需要帶 `Authorization: Bearer <CRON_SECRET>`，沒設 `CRON_SECRET` 時這支 API 一律回 401。
+建議每天跑一次，用任何排程器都可以（Vercel Cron、GitHub Actions、cron-job.org…）：
+
+```bash
+curl -H "Authorization: Bearer $CRON_SECRET" https://<正式網域>/api/cron/cleanup-assets
+```
+
+## 錄音同意與刪除
+
+- 第一次開始語音訪談或開白板前，會先跳出同意畫面；同意時間記在 `User.recordingConsentAt`。
+  同意文字在 `messages/zh-TW.ts`、`messages/en.ts` 的 `consent`，**上線前請依實際的研究倫理 / 個資告知需求調整**。
+- 訪談列表可以刪除整場訪談；素材庫（`/session/[id]/materials`）可以刪除單一白板或圖片。
+  兩者都會同時刪掉 R2 上的檔案。
+
+## Gemini 金鑰
+
+`GOOGLE_API_KEY` 只在 server 使用。瀏覽器開始語音訪談前，會向
+`POST /api/session/[id]/live-token` 要一個一次性的短效 token（60 秒內要連上、連線最長 60 分鐘）。
+舊的 `NEXT_PUBLIC_GOOGLE_API_KEY` 已不再使用，請從部署環境的環境變數移除。
+
 ## 已知限制
 
-- 訪談錄音是分段檔，逐字稿頁用播放器接起來播，段與段交接處可能有極短的停頓。
+- 訪談錄音是分段檔，播放器會接起來播，段與段交接處可能有極短的停頓。
 - 分頁當掉或斷網時，最多損失最後一段（60 秒內）的錄音。
-- 上傳到一半就中斷的素材會留下 `PENDING` 的資料列（R2 上可能有或沒有檔案），目前沒有自動清理。
 - 白板錄影單次上限 20 分鐘，到時間會自動完成並儲存。
+- 產生訪談總結時最多附 8 張白板完成圖給模型。
 
-## 後續規劃
+## 尚未完成
 
-1. **上線前必做**
-   - Gemini API key 目前打包在前端（`NEXT_PUBLIC_GOOGLE_API_KEY`），改成後端簽發 Live API ephemeral token。
-   - 錄音同意：第一次訪談前的同意畫面、保存期限、受訪者自行刪除訪談的 UI（API 已有 `DELETE /api/session/[id]`）。
-2. **白板作為訪談素材**
-   - 產生訪談總結時把白板完成圖一起交給模型。
-   - 每段白板自動產生說明文字；做一個「素材庫」頁面集中瀏覽 / 下載。
-   - 用 `WHITEBOARD_STROKES` 做可互動的重播。
-3. **後製與維運**
-   - 背景工作把錄音分段合併成單一檔案、把 webm 白板影片轉成 mp4。
-   - 定期清掉超過 24 小時的 `PENDING` 素材；R2 lifecycle rule。
-   - Supabase 備份（PITR）與 R2 bucket 的異地備份。
+1. **保存期限**：目前素材會一直保留到使用者自己刪除。要不要自動過期、保留多久，需要先決定政策。
+2. **錄音合併 / 轉檔**：把錄音分段合併成單一檔案、把 webm 白板影片轉成 mp4。
+   需要一個能跑 ffmpeg 的背景工作環境（一般的 serverless function 不適合），要先決定放哪裡。
+3. **白板重播**：用 `WHITEBOARD_STROKES` 做可互動的重播（資料已經有存，只差播放介面）。
+4. **白板自動說明文字**：每段白板存檔後自動產生一段文字描述。
+5. **備份**：Supabase PITR 與 R2 bucket 的異地備份。

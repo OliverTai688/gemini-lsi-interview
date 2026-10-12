@@ -25,6 +25,9 @@ model User {
   accounts       Account[]
   sessions       Session[]
   onboardingCompleted Boolean @default(false)
+
+  // 同意訪談錄音 / 錄影的時間；null = 尚未同意
+  recordingConsentAt  DateTime?
 }
 
 /// ------------------------------

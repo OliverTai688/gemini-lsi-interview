@@ -16,6 +16,7 @@ import {
   ChevronLeft,
   PenLine,
   ImagePlus,
+  FolderOpen,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -44,6 +45,7 @@ import {
   SegmentedRecorder,
 } from "@/lib/segmented-recorder";
 import Whiteboard from "@/components/Whiteboard";
+import ConsentDialog from "@/components/ConsentDialog";
 
 // 訪談錄音每 60 秒切一段上傳 → 分頁當掉最多損失最後一段
 const RECORDING_SEGMENT_MS = 60_000;
@@ -90,6 +92,11 @@ export default function LiveInterviewPage() {
   const [mixStream, setMixStream] = useState<MediaStream | null>(null);
   const [pendingUploads, setPendingUploads] = useState(0);
   const [uploadNotice, setUploadNotice] = useState("");
+
+  // 錄音 / 錄影同意：還沒同意過的人，第一次開始訪談或開白板前要先同意
+  const [consented, setConsented] = useState(false);
+  const [consentOpen, setConsentOpen] = useState(false);
+  const afterConsentRef = useRef<(() => void) | null>(null);
 
   // -------------------------
   // Refs
@@ -161,6 +168,25 @@ export default function LiveInterviewPage() {
 
     fetchTranscript();
   }, [id, t.sessionPage.startTitle]);
+
+  // -------------------------
+  // 是否已同意錄音
+  // -------------------------
+  useEffect(() => {
+    fetch("/api/auth/me")
+      .then((res) => res.json())
+      .then((data) => setConsented(!!data?.user?.recordingConsentAt))
+      .catch((err) => console.error("Failed to load consent:", err));
+  }, []);
+
+  const withConsent = (action: () => void) => {
+    if (consented) {
+      action();
+      return;
+    }
+    afterConsentRef.current = action;
+    setConsentOpen(true);
+  };
 
   // -------------------------
   // Scroll bottom
@@ -302,14 +328,22 @@ export default function LiveInterviewPage() {
       aiStartedAtRef.current = null;
 
       try {
-        const apiKey = process.env.NEXT_PUBLIC_GOOGLE_API_KEY;
-        if (!apiKey) {
-          console.error("Missing NEXT_PUBLIC_GOOGLE_API_KEY");
+        // 向後端要一次性的短效 token（長效 API key 不會出現在瀏覽器）
+        const tokenRes = await fetch(`/api/session/${id}/live-token`, {
+          method: "POST",
+        });
+        if (!tokenRes.ok) {
+          console.error("Failed to get live token:", tokenRes.status);
+          setUploadNotice(t.sessionPage.connectFailed);
           setStatus("error");
           return;
         }
+        const { token } = (await tokenRes.json()) as { token: string };
 
-        const ai = new GoogleGenAI({ apiKey });
+        const ai = new GoogleGenAI({
+          apiKey: token,
+          httpOptions: { apiVersion: "v1alpha" },
+        });
 
         sessionPromiseRef.current = ai.live.connect({
           model: "gemini-2.5-flash-native-audio-preview-09-2025",
@@ -551,7 +585,7 @@ try {
         stopAudioProcessing();
       }
     }
-  }, [id, status, stopConversation, stopAudioProcessing, trackUpload, t.system.prompt]);
+  }, [id, status, stopConversation, stopAudioProcessing, trackUpload, t.system.prompt, t.sessionPage.connectFailed]);
 
   // -------------------------
   // Text 模式
@@ -609,6 +643,15 @@ try {
           </div>
 
           <div className="flex items-center gap-3">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => router.push(`/session/${id}/materials`)}
+            >
+              <FolderOpen className="w-4 h-4 mr-2" />
+              {t.sessionPage.materials}
+            </Button>
+
             <Button
               variant="outline"
               size="sm"
@@ -699,7 +742,7 @@ try {
               className="rounded-full w-11 h-11 p-0"
               title={t.sessionPage.whiteboard}
               aria-label={t.sessionPage.whiteboard}
-              onClick={() => setWhiteboardOpen(true)}
+              onClick={() => withConsent(() => setWhiteboardOpen(true))}
             >
               <PenLine className="w-5 h-5" />
             </Button>
@@ -707,7 +750,12 @@ try {
             <Button
               size="lg"
               disabled={isProcessing}
-              onClick={handleToggleConversation}
+              onClick={() =>
+                // 停止不需要同意；開始錄之前才需要
+                status === "connected"
+                  ? handleToggleConversation()
+                  : withConsent(() => void handleToggleConversation())
+              }
               className={`rounded-full w-16 h-16 shadow-lg transition-all active:scale-95 ${
                 status === "connected"
                   ? "bg-red-500 animate-pulse"
@@ -794,6 +842,20 @@ try {
           </div> */}
         </div>
       </footer>
+
+      <ConsentDialog
+        open={consentOpen}
+        onCancel={() => {
+          afterConsentRef.current = null;
+          setConsentOpen(false);
+        }}
+        onAgreed={() => {
+          setConsented(true);
+          setConsentOpen(false);
+          afterConsentRef.current?.();
+          afterConsentRef.current = null;
+        }}
+      />
 
       {whiteboardOpen && (
         <Whiteboard

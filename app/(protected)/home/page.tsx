@@ -7,6 +7,7 @@ import {
   MessageSquare,
   ChevronRight,
   Loader2,
+  Trash2,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -14,6 +15,8 @@ import { Card, CardContent } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
@@ -42,6 +45,10 @@ export default function HomePage() {
   const [creating, setCreating] = useState(false);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [newSessionTitle, setNewSessionTitle] = useState("");
+
+  const [deleteTarget, setDeleteTarget] = useState<SessionType | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
 
   useEffect(() => {
     fetchSessions();
@@ -79,6 +86,27 @@ export default function HomePage() {
       console.error("Failed to create session:", error);
     } finally {
       setCreating(false);
+    }
+  };
+
+  const deleteSession = async () => {
+    if (!deleteTarget) return;
+
+    setDeleting(true);
+    setDeleteError("");
+    try {
+      const response = await fetch(`/api/session/${deleteTarget.id}`, {
+        method: "DELETE",
+      });
+      if (!response.ok) throw new Error(`Delete failed: ${response.status}`);
+
+      setSessions((prev) => prev.filter((s) => s.id !== deleteTarget.id));
+      setDeleteTarget(null);
+    } catch (error) {
+      console.error("Failed to delete session:", error);
+      setDeleteError(text.deleteDialog.failed);
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -232,7 +260,22 @@ export default function HomePage() {
                       </div>
                     </div>
 
-                    <ChevronRight className="w-5 h-5 text-gray-400 group-hover:text-orange-500 transition-colors flex-shrink-0 ml-4" />
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      title={text.deleteDialog.button}
+                      aria-label={text.deleteDialog.button}
+                      className="ml-4 text-gray-400 hover:text-red-500 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setDeleteError("");
+                        setDeleteTarget(session);
+                      }}
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </Button>
+
+                    <ChevronRight className="w-5 h-5 text-gray-400 group-hover:text-orange-500 transition-colors flex-shrink-0 ml-2" />
                   </div>
                 </CardContent>
               </Card>
@@ -240,6 +283,52 @@ export default function HomePage() {
           </div>
         )}
       </main>
+
+      {/* 刪除確認 */}
+      <Dialog
+        open={!!deleteTarget}
+        onOpenChange={(open) => !open && !deleting && setDeleteTarget(null)}
+      >
+        <DialogContent className="bg-white border-gray-200 sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-xl font-light text-black">
+              {text.deleteDialog.title}
+            </DialogTitle>
+            <DialogDescription className="text-sm text-gray-600">
+              <span className="block font-medium text-black mb-1">
+                {deleteTarget?.title || text.sessionCard.untitled}
+              </span>
+              {text.deleteDialog.description}
+            </DialogDescription>
+          </DialogHeader>
+
+          {deleteError && <p className="text-sm text-red-500">{deleteError}</p>}
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setDeleteTarget(null)}
+              disabled={deleting}
+            >
+              {text.deleteDialog.cancel}
+            </Button>
+            <Button
+              className="bg-red-500 hover:bg-red-600 text-white"
+              onClick={deleteSession}
+              disabled={deleting}
+            >
+              {deleting ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  {text.deleteDialog.deleting}
+                </>
+              ) : (
+                text.deleteDialog.confirm
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
