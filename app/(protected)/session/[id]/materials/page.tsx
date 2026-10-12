@@ -69,6 +69,34 @@ export default function MaterialsPage() {
     () => assets.filter((a) => a.kind === "INTERVIEW_AUDIO"),
     [assets]
   );
+  const mergedAudio = useMemo(
+    () => assets.find((a) => a.kind === "INTERVIEW_AUDIO_MERGED") ?? null,
+    [assets]
+  );
+  // 合併之後又錄了新的分段
+  const mergeStale =
+    !!mergedAudio && (mergedAudio.seq ?? 0) < audioSegments.length;
+
+  const [merging, setMerging] = useState(false);
+
+  const mergeRecording = async () => {
+    setMerging(true);
+    setError("");
+    try {
+      const res = await fetch(`/api/session/${id}/recording`, { method: "POST" });
+      if (res.status === 409) {
+        setError(text.mergeMixed);
+        return;
+      }
+      if (!res.ok) throw new Error(`Merge failed: ${res.status}`);
+      await fetchAssets();
+    } catch (err) {
+      console.error("Failed to merge recording:", err);
+      setError(text.mergeFailed);
+    } finally {
+      setMerging(false);
+    }
+  };
 
   const formatDateTime = (ms: number) =>
     new Date(ms).toLocaleString(lang === "zh-TW" ? "zh-TW" : "en-US", {
@@ -281,7 +309,39 @@ export default function MaterialsPage() {
 
             <SessionAudioPlayer segments={audioSegments} label={text.recording} />
 
-            <div className="flex flex-wrap gap-2 mt-4">
+            {/* 完整錄音（單一檔案） */}
+            <div className="flex flex-wrap items-center gap-2 mt-4">
+              {mergedAudio && (
+                <Button asChild size="sm" className="bg-orange-500 text-white hover:bg-orange-600">
+                  <a href={`${mergedAudio.url}?download=1`}>
+                    <Download className="w-3.5 h-3.5 mr-1.5" />
+                    {text.downloadFull}
+                    <span className="ml-1.5 opacity-80">
+                      {formatDuration(mergedAudio.durationMs)}
+                    </span>
+                  </a>
+                </Button>
+              )}
+              {audioSegments.length > 1 && (!mergedAudio || mergeStale) && (
+                <Button variant="outline" size="sm" onClick={mergeRecording} disabled={merging}>
+                  {merging ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                      {text.merging}
+                    </>
+                  ) : mergedAudio ? (
+                    text.remerge
+                  ) : (
+                    text.merge
+                  )}
+                </Button>
+              )}
+              {mergeStale && !merging && (
+                <span className="text-xs text-gray-600">{text.mergeStale}</span>
+              )}
+            </div>
+
+            <div className="flex flex-wrap gap-2 mt-3">
               {audioSegments.map((segment, index) => (
                 <Button key={segment.id} asChild variant="outline" size="sm">
                   <a href={`${segment.url}?download=1`}>

@@ -42,6 +42,9 @@ model Invite {
 
   // 連結裡的 token 只存 sha256，資料庫外洩也無法反推出連結
   tokenHash      String    @unique
+  // 用 AUTH_SECRET 衍生的金鑰加密的 token → 後台可以隨時再複製連結；
+  // 單有資料庫（沒有 AUTH_SECRET）還原不出連結
+  tokenEnc       String?
   // 研究者給這位受訪者的代號 / 名稱
   label          String
 
@@ -93,6 +96,10 @@ model Session {
   createdAt DateTime  @default(now())
   // 受訪者按下「結束訪談」的時間
   completedAt DateTime?
+  // 目前談到訪談腳本的哪一題（A1、B1…B8、C1…C3），每回合由模型判斷後更新
+  progressStep String?
+  // 最近一次開始語音訪談的瀏覽器分頁；另一個裝置開始後，舊的那邊會被請出去
+  activeClientId String?
 
   summary   Json?
 
@@ -128,6 +135,7 @@ model Turn {
 /// ------------------------------
 enum AssetKind {
   INTERVIEW_AUDIO      // 訪談錄音（受訪者 + AI 混音，分段）
+  INTERVIEW_AUDIO_MERGED // 把所有分段合併後的單一檔案（下載用）
   WHITEBOARD_VIDEO     // 白板繪製過程 + 解說音訊
   WHITEBOARD_SNAPSHOT  // 白板完成圖（PNG）
   WHITEBOARD_STROKES   // 白板筆畫資料（JSON，可重新算圖）
@@ -164,4 +172,18 @@ model Asset {
 
   @@index([sessionId, kind, startedAt])
   @@index([groupId])
+}
+
+/// ------------------------------
+/// AdminLog（研究者在後台做了什麼）
+/// ------------------------------
+model AdminLog {
+  id         String   @id @default(cuid())
+  adminEmail String
+  action     String
+  // 受訪者代號等，方便事後閱讀；對象被刪除後仍然保留
+  target     String?
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
 }

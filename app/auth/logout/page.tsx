@@ -6,9 +6,12 @@ import { signOut } from "next-auth/react";
 import { LogOut, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { useLanguage } from "@/context/LanguageContext";
 
 export default function LogoutPage() {
   const router = useRouter();
+  const { t } = useLanguage();
+  const text = t.auth;
   const [isProcessing, setIsProcessing] = useState(true);
   const [counter, setCounter] = useState(2);
 
@@ -49,19 +52,19 @@ export default function LogoutPage() {
 
           {/* Title */}
           <h1 className="text-2xl font-light text-black mb-2">
-            已成功登出
+            {text.logoutTitle}
           </h1>
 
           {/* Subtitle */}
           <p className="text-sm text-gray-500 mb-6">
-            期待你再次使用 Interview AI
+            {text.logoutSubtitle}
           </p>
 
           {/* Redirect Notice */}
           <p className="text-xs text-gray-400 mb-6">
             {isProcessing
-              ? "正在處理中..."
-              : `將在 ${counter} 秒後自動返回登入頁`}
+              ? text.logoutProcessing
+              : text.logoutRedirect.replace("{n}", String(Math.max(counter, 0)))}
           </p>
 
           {/* Button */}
@@ -69,7 +72,7 @@ export default function LogoutPage() {
             onClick={() => router.push("/auth/login")}
             className="w-full bg-orange-500 text-white hover:bg-orange-600"
           >
-            返回登入頁
+            {text.backToLogin}
           </Button>
         </Card>
       </div>

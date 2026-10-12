@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
 import { requireOwnedSession } from "@/lib/guards";
 import { deleteObjects } from "@/lib/r2";
+import { logAdmin } from "@/lib/admin-log";
 
 export const runtime = "nodejs";
 
@@ -46,6 +47,7 @@ export async function DELETE(
     }
 
     await prisma.session.delete({ where: { id } });
+    if (!guard.isOwner) await logAdmin("session.delete", guard.session.title ?? id);
 
     return NextResponse.json({ ok: true });
   } catch (err) {

@@ -2,6 +2,7 @@
 import { NextResponse } from "next/server";
 import { GoogleGenAI } from "@google/genai";
 import { requireOwnedSession } from "@/lib/guards";
+import { prisma } from "@/lib/prisma";
 
 export const runtime = "nodejs";
 
@@ -39,6 +40,15 @@ export async function POST(
     });
 
     if (!token.name) throw new Error("Empty token");
+
+    // 最後開始訪談的那個分頁才是「現場」；其他裝置下次存檔時會被告知已被接手
+    const body = (await req.json().catch(() => ({}))) as { clientId?: string };
+    if (body.clientId) {
+      await prisma.session.update({
+        where: { id: sessionId },
+        data: { activeClientId: body.clientId.slice(0, 64) },
+      });
+    }
 
     return NextResponse.json({ token: token.name });
   } catch (err) {

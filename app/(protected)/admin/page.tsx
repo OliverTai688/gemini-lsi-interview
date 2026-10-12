@@ -2,13 +2,14 @@
 // 研究者後台：建立受訪者的專屬連結、查看每位受訪者的進度與訪談內容
 "use client";
 
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
 import {
   Ban,
   Check,
   Copy,
+  Download,
   FileText,
   FolderOpen,
   Loader2,
@@ -33,6 +34,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import LanguageSwitcher from "@/components/LanguageSwitcher";
 import { useLanguage } from "@/context/LanguageContext";
+import { INTERVIEW_STEPS, stepIndex } from "@/lib/interview-script";
 
 type InviteRow = {
   id: string;
@@ -42,9 +44,11 @@ type InviteRow = {
   firstOpenedAt: string | null;
   lastOpenedAt: string | null;
   revoked: boolean;
+  canCopyLink: boolean;
   session: {
     id: string;
     completed: boolean;
+    progressStep: string | null;
     hasSummary: boolean;
     turnCount: number;
     lastTurnAt: string | null;
@@ -52,6 +56,14 @@ type InviteRow = {
 };
 
 type StatusKey = "notOpened" | "opened" | "inProgress" | "completed" | "revoked";
+
+type LogRow = {
+  id: string;
+  adminEmail: string;
+  action: string;
+  target: string | null;
+  createdAt: string;
+};
 
 const STATUS_STYLE: Record<StatusKey, string> = {
   notOpened: "bg-gray-100 text-gray-600",
@@ -93,6 +105,13 @@ export default function AdminPage() {
   // 剛產生的連結：只會出現這一次
   const [freshLink, setFreshLink] = useState<{ label: string; url: string } | null>(null);
   const [copied, setCopied] = useState(false);
+
+  const [query, setQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<StatusKey | "all">("all");
+  const [copiedRowId, setCopiedRowId] = useState<string | null>(null);
+
+  const [logsOpen, setLogsOpen] = useState(false);
+  const [logs, setLogs] = useState<LogRow[]>([]);
 
   const fetchRows = useCallback(async () => {
     try {
@@ -177,6 +196,51 @@ export default function AdminPage() {
     }
   };
 
+  const visibleRows = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return rows.filter(
+      (row) =>
+        (statusFilter === "all" || statusOf(row) === statusFilter) &&
+        (!q ||
+          row.label.toLowerCase().includes(q) ||
+          (row.participantName ?? "").toLowerCase().includes(q))
+    );
+  }, [rows, query, statusFilter]);
+
+  // 再複製一次這位受訪者的連結
+  const copyRowLink = async (row: InviteRow) => {
+    setBusyId(row.id);
+    setError("");
+    try {
+      const res = await fetch(`/api/admin/invites/${row.id}`);
+      if (!res.ok) throw new Error(`Get link failed: ${res.status}`);
+      const data = (await res.json()) as { token: string };
+
+      await navigator.clipboard.writeText(inviteUrl(data.token));
+      setCopiedRowId(row.id);
+      setTimeout(() => setCopiedRowId(null), 2000);
+    } catch (err) {
+      console.error("Failed to copy link:", err);
+      setError(text.actionFailed);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const toggleLogs = async () => {
+    const next = !logsOpen;
+    setLogsOpen(next);
+    if (!next) return;
+    try {
+      const res = await fetch("/api/admin/logs");
+      if (!res.ok) throw new Error(`Fetch logs failed: ${res.status}`);
+      const data: { logs: LogRow[] } = await res.json();
+      setLogs(data.logs);
+    } catch (err) {
+      console.error("Failed to fetch logs:", err);
+    }
+  };
+
   const copyLink = async () => {
     if (!freshLink) return;
     try {
@@ -246,6 +310,37 @@ export default function AdminPage() {
       <main className="max-w-6xl mx-auto px-6 py-8">
         {error && <p className="text-sm text-red-500 mb-4">{error}</p>}
 
+        {rows.length > 0 && (
+          <div className="flex flex-wrap items-center gap-3 mb-4">
+            <Input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder={text.searchPlaceholder}
+              className="max-w-xs"
+            />
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value as StatusKey | "all")}
+              aria-label={text.columns.status}
+              className="h-9 rounded-md border border-gray-200 bg-white px-3 text-sm"
+            >
+              <option value="all">{text.allStatuses}</option>
+              {(Object.keys(STATUS_STYLE) as StatusKey[]).map((key) => (
+                <option key={key} value={key}>
+                  {text.status[key]}
+                </option>
+              ))}
+            </select>
+
+            <Button asChild variant="outline" className="ml-auto">
+              <a href="/api/admin/export">
+                <Download className="w-4 h-4 mr-2" />
+                {text.exportAll}
+              </a>
+            </Button>
+          </div>
+        )}
+
         {loading ? (
           <div className="flex justify-center py-20">
             <Loader2 className="w-8 h-8 animate-spin text-gray-400" />
@@ -267,8 +362,16 @@ export default function AdminPage() {
                 </tr>
               </thead>
               <tbody>
-                {rows.map((row) => {
+                {visibleRows.length === 0 && (
+                  <tr className="border-t border-gray-200">
+                    <td colSpan={5} className="px-4 py-8 text-center text-gray-500">
+                      {text.noMatch}
+                    </td>
+                  </tr>
+                )}
+                {visibleRows.map((row) => {
                   const state = statusOf(row);
+                  const step = stepIndex(row.session?.progressStep);
                   const busy = busyId === row.id;
                   return (
                     <tr key={row.id} className="border-t border-gray-200 align-top">
@@ -292,6 +395,12 @@ export default function AdminPage() {
                       <td className="px-4 py-3">
                         <p className="text-gray-700 whitespace-nowrap">
                           {row.session?.turnCount ?? 0} {text.turns}
+                          {step >= 0 && (
+                            <span className="text-gray-500">
+                              {" · "}
+                              {INTERVIEW_STEPS[step].id} {step + 1}/{INTERVIEW_STEPS.length}
+                            </span>
+                          )}
                         </p>
                         {row.session && (
                           <div className="flex flex-wrap gap-x-3 gap-y-1 mt-1.5 text-xs">
@@ -330,6 +439,22 @@ export default function AdminPage() {
                       <td className="px-4 py-3">
                         <div className="flex justify-end gap-1">
                           {busy && <Loader2 className="w-4 h-4 animate-spin text-gray-400 mt-2 mr-1" />}
+                          {row.canCopyLink && !row.revoked && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              title={copiedRowId === row.id ? text.linkCopied : text.copyLink}
+                              aria-label={text.copyLink}
+                              disabled={busy}
+                              onClick={() => copyRowLink(row)}
+                            >
+                              {copiedRowId === row.id ? (
+                                <Check className="w-4 h-4 text-green-600" />
+                              ) : (
+                                <Copy className="w-4 h-4" />
+                              )}
+                            </Button>
+                          )}
                           <Button
                             variant="ghost"
                             size="sm"
@@ -383,6 +508,40 @@ export default function AdminPage() {
             </table>
           </div>
         )}
+
+        {/* 操作紀錄 */}
+        <div className="mt-8">
+          <button
+            type="button"
+            className="text-sm text-gray-600 underline underline-offset-2 hover:text-black"
+            onClick={toggleLogs}
+          >
+            {logsOpen ? text.hideLogs : text.showLogs}
+          </button>
+
+          {logsOpen && (
+            <Card className="mt-3 gap-0 border-gray-200 p-0">
+              {logs.length === 0 ? (
+                <p className="p-4 text-sm text-gray-500">{text.logsEmpty}</p>
+              ) : (
+                <ul className="divide-y divide-gray-200 text-sm">
+                  {logs.map((log) => (
+                    <li key={log.id} className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-2">
+                      <span className="w-32 shrink-0 text-gray-500">
+                        {formatDateTime(log.createdAt)}
+                      </span>
+                      <span className="font-medium text-black">
+                        {(text.actions as Record<string, string>)[log.action] ?? log.action}
+                      </span>
+                      {log.target && <span className="text-gray-700">{log.target}</span>}
+                      <span className="ml-auto text-xs text-gray-500">{log.adminEmail}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </Card>
+          )}
+        </div>
       </main>
 
       {/* 新增受訪者 */}

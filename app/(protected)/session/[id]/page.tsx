@@ -33,7 +33,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import LanguageSwitcher from "@/components/LanguageSwitcher";
 import { useLanguage } from "@/context/LanguageContext";
 
 import {
@@ -57,6 +56,10 @@ import {
 } from "@/lib/segmented-recorder";
 import Whiteboard from "@/components/Whiteboard";
 import ConsentDialog from "@/components/ConsentDialog";
+import InterviewProgress from "@/components/InterviewProgress";
+
+// 回合存檔後等幾秒再去問進度（伺服器是在回應之後才判斷的）
+const PROGRESS_REFRESH_DELAY_MS = 6000;
 
 // 訪談錄音每 60 秒切一段上傳 → 分頁當掉最多損失最後一段
 const RECORDING_SEGMENT_MS = 60_000;
@@ -85,6 +88,7 @@ type TranscriptResponse = {
   }[];
   completed?: boolean;
   isOwner?: boolean;
+  progressStep?: string | null;
 };
 
 // -------------------------
@@ -121,6 +125,13 @@ export default function LiveInterviewPage() {
   const afterConsentRef = useRef<(() => void) | null>(null);
 
   const [notFound, setNotFound] = useState(false);
+
+  // 這個瀏覽器分頁的識別碼：同一場訪談在別的裝置開始時，用來判斷這邊該停下來
+  const [clientId] = useState(() => crypto.randomUUID());
+  const [progressStep, setProgressStep] = useState<string | null>(null);
+
+  // 打字備援：麥克風不能用、或不方便說話時
+  const [textOpen, setTextOpen] = useState(false);
   const [endOpen, setEndOpen] = useState(false);
   const [ending, setEnding] = useState(false);
 
@@ -159,15 +170,6 @@ export default function LiveInterviewPage() {
   const userStartedAtRef = useRef<string | null>(null);
   const aiStartedAtRef = useRef<string | null>(null);
 
-  const buildContextHistory = (msgs: ChatMessage[]) => {
-  return msgs
-    .map(m => {
-      const speaker = m.role === "user" ? "User" : "Assistant";
-      return `${speaker}: ${m.content}`;
-    })
-    .join("\n");
-};
-
 
   // keep messages ref sync
   useEffect(() => {
@@ -199,6 +201,7 @@ export default function LiveInterviewPage() {
         }
 
         setSessionTitle(data.title || t.invitePage.brand);
+        setProgressStep(data.progressStep ?? null);
 
         const loaded =
           data.messages?.map((m) => ({
@@ -240,7 +243,7 @@ export default function LiveInterviewPage() {
   // -------------------------
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, currentOutput]);
+  }, [messages, currentOutput, currentInput]);
 
   // -------------------------
   // 素材上傳（R2）
@@ -385,6 +388,8 @@ export default function LiveInterviewPage() {
         // 向後端要一次性的短效 token（長效 API key 不會出現在瀏覽器）
         const tokenRes = await fetch(`/api/session/${id}/live-token`, {
           method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ clientId }),
         });
         if (!tokenRes.ok) {
           console.error("Failed to get live token:", tokenRes.status);
@@ -443,23 +448,21 @@ try {
 
 
   // --- 3) 麥克風 Audio Pipeline ---
-  let stream: MediaStream;
+  let stream: MediaStream | null = null;
   try {
     stream = await navigator.mediaDevices.getUserMedia({ audio: true });
   } catch (err) {
-    // 沒有麥克風權限 → 關掉連線並告訴使用者怎麼處理
+    // 沒有麥克風 → 連線留著，改用打字進行（AI 還是會用語音回應）
     console.error("Microphone unavailable:", err);
-    wantLiveRef.current = false;
     setUploadNotice(t.sessionPage.micDenied);
-    sessionPromiseRef.current?.then((session) => session.close());
-    return;
+    setTextOpen(true);
   }
   mediaStreamRef.current = stream;
 
   // --- 4) 錄音：麥克風 + AI 語音混成一軌，分段上傳 R2 ---
   try {
     const recDest = outCtx.createMediaStreamDestination();
-    outCtx.createMediaStreamSource(stream).connect(recDest);
+    if (stream) outCtx.createMediaStreamSource(stream).connect(recDest);
     recDestRef.current = recDest;
     setMixStream(recDest.stream);
 
@@ -485,6 +488,8 @@ try {
   } catch (err) {
     console.error("Failed to start recording:", err);
   }
+
+  if (!stream) return;
 
   const source = inCtx.createMediaStreamSource(stream);
   mediaStreamSourceRef.current = source;
@@ -605,7 +610,7 @@ try {
 
                 // 存 DB
                 try {
-                  await fetch(`/api/session/${id}/live-turn`, {
+                  const saveRes = await fetch(`/api/session/${id}/live-turn`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
@@ -614,8 +619,27 @@ try {
                       userStartedAt,
                       aiStartedAt,
                       endedAt: timestamp,
+                      clientId,
                     }),
                   });
+                  const saved = (await saveRes.json().catch(() => ({}))) as {
+                    superseded?: boolean;
+                  };
+
+                  // 同一場訪談在另一個裝置 / 分頁開始了 → 這邊停下來，避免兩邊同時進行
+                  if (saved.superseded) {
+                    wantLiveRef.current = false;
+                    setUploadNotice(t.sessionPage.superseded);
+                    sessionPromiseRef.current?.then((session) => session.close());
+                    return;
+                  }
+
+                  setTimeout(() => {
+                    fetch(`/api/session/${id}/progress`)
+                      .then((res) => res.json())
+                      .then((data) => setProgressStep(data.progressStep ?? null))
+                      .catch(() => {});
+                  }, PROGRESS_REFRESH_DELAY_MS);
                 } catch (err) {
                   console.error("Failed to save live turn:", err);
                 }
@@ -670,7 +694,7 @@ try {
         stopAudioProcessing();
       }
     }
-  }, [id, status, stopConversation, stopAudioProcessing, trackUpload, t.system.prompt, t.sessionPage.connectFailed, t.sessionPage.micDenied]);
+  }, [id, clientId, status, stopConversation, stopAudioProcessing, trackUpload, t.system.prompt, t.sessionPage.connectFailed, t.sessionPage.micDenied, t.sessionPage.superseded]);
 
   // -------------------------
   // 自動重連
@@ -757,27 +781,20 @@ try {
   // -------------------------
   // Text 模式
   // -------------------------
-  const sendTextMessage = async () => {
-    if (!textInput.trim()) return;
+  // 打字的內容走同一條 Live 連線送出，AI 一樣用語音回應；
+  // 回合結束時會和語音輸入一樣被存成逐字稿
+  const sendTextMessage = () => {
+    const text = textInput.trim();
+    if (!text || status !== "connected") return;
 
-    const msg: ChatMessage = {
-      role: "user",
-      content: textInput,
-      timestamp: new Date().toISOString(),
-    };
-
-    setMessages((prev) => [...prev, msg]);
     setTextInput("");
+    userStartedAtRef.current ??= new Date().toISOString();
+    currentInputRef.current += text;
+    setCurrentInput(currentInputRef.current);
 
-    try {
-      await fetch(`/api/session/${id}/transcript`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: msg.content }),
-      });
-    } catch (err) {
-      console.error("Failed to send text:", err);
-    }
+    sessionPromiseRef.current?.then((session) => {
+      session.sendRealtimeInput({ text });
+    });
   };
 
   const formatTime = (timestamp: string) => {
@@ -880,16 +897,18 @@ try {
         </div>
       </header>
 
+      {messages.length > 0 && <InterviewProgress step={progressStep} />}
+
       {/* Messages */}
       <main className="flex-1 overflow-y-auto">
         <div className="max-w-4xl mx-auto px-6 py-8">
           {messages.length === 0 && !currentOutput ? (
             <div className="flex flex-col items-center py-20 text-center">
               <Mic className="w-8 h-8 text-gray-400 mb-4" />
-              <h3 className="text-lg font-light">
+              <h3 className="text-xl font-light">
                 {t.sessionPage.startTitle}
               </h3>
-              <p className="text-sm text-gray-500">
+              <p className="text-base text-gray-600 mt-1">
                 {t.sessionPage.startSubtitle}
               </p>
             </div>
@@ -909,10 +928,10 @@ try {
                         : "bg-white text-black border-gray-200"
                     }`}
                   >
-                    <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+                    <p className="text-base leading-relaxed whitespace-pre-wrap">{msg.content}</p>
                     <p
                       className={`text-xs mt-2 ${
-                        msg.role === "user" ? "text-gray-400" : "text-gray-500"
+                        msg.role === "user" ? "text-gray-300" : "text-gray-600"
                       }`}
                     >
                       {formatTime(msg.timestamp)}
@@ -921,12 +940,22 @@ try {
                 </div>
               ))}
 
+              {/* 即時字幕：受訪者正在說的話 */}
+              {currentInput && (
+                <div className="flex justify-end">
+                  <Card className="max-w-[75%] p-4 rounded-2xl shadow-sm bg-gray-700 text-white border-gray-700">
+                    <p className="text-base leading-relaxed whitespace-pre-wrap">{currentInput}</p>
+                    <p className="text-xs mt-2 text-gray-300">{t.sessionPage.you}…</p>
+                  </Card>
+                </div>
+              )}
+
               {/* 即時 output */}
               {currentOutput && (
                 <div className="flex justify-start">
                   <Card className="max-w-[75%] p-4 rounded-2xl shadow-sm bg-white">
-                    <p className="text-sm whitespace-pre-wrap">{currentOutput}</p>
-                    <p className="text-xs mt-2 text-gray-500">...</p>
+                    <p className="text-base leading-relaxed whitespace-pre-wrap">{currentOutput}</p>
+                    <p className="text-xs mt-2 text-gray-600">...</p>
                   </Card>
                 </div>
               )}
@@ -1000,7 +1029,7 @@ try {
             />
             </div>
 
-            <span className="text-xs text-gray-500">
+            <span className="text-sm text-gray-700">
               {status === "connected"
                 ? t.sessionPage.liveStatus.connected
                 : status === "connecting"
@@ -1012,43 +1041,58 @@ try {
                 : t.sessionPage.liveStatus.idle}
             </span>
 
-            <span className="text-xs text-gray-400">
+            <span className="text-xs text-gray-600 text-center">
               {pendingUploads > 0 ? (
                 <span className="inline-flex items-center gap-1.5">
                   <Loader2 className="w-3 h-3 animate-spin" />
                   {t.sessionPage.uploading}
                 </span>
               ) : uploadNotice ? (
-                <span className="text-red-500">{uploadNotice}</span>
+                <span className="text-sm text-red-600">{uploadNotice}</span>
               ) : (
                 t.sessionPage.recordingNotice
               )}
             </span>
           </div>
 
-          {/* Text mode */}
-          {/* <div className="flex items-center gap-2 mt-2">
-            <Input
-              placeholder={t.sessionPage.textPlaceholder}
-              value={textInput}
-              onChange={(e) => setTextInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  sendTextMessage();
-                }
-              }}
-              className="flex-1"
-            />
+          {/* 打字備援：只有連線中才能送出（AI 會用語音回應） */}
+          {status === "connected" && (
+            <div className="flex flex-col items-center gap-2">
+              <button
+                type="button"
+                className="text-sm text-gray-600 underline underline-offset-2 hover:text-black"
+                onClick={() => setTextOpen((open) => !open)}
+              >
+                {textOpen ? t.sessionPage.hideTyping : t.sessionPage.typeInstead}
+              </button>
 
-            <Button
-              disabled={!textInput.trim()}
-              onClick={sendTextMessage}
-              className="bg-orange-500 text-white hover:bg-orange-600"
-            >
-              Send
-            </Button>
-          </div> */}
+              {textOpen && (
+                <div className="flex w-full items-center gap-2">
+                  <Input
+                    placeholder={t.sessionPage.textPlaceholder}
+                    value={textInput}
+                    onChange={(e) => setTextInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      // 中文輸入法選字時的 Enter 不算送出
+                      if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                        e.preventDefault();
+                        sendTextMessage();
+                      }
+                    }}
+                    className="flex-1 h-11 text-base"
+                  />
+
+                  <Button
+                    disabled={!textInput.trim()}
+                    onClick={sendTextMessage}
+                    className="h-11 bg-orange-500 text-white hover:bg-orange-600"
+                  >
+                    {t.sessionPage.send}
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </footer>
 

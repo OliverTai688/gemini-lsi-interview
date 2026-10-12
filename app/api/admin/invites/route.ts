@@ -2,6 +2,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { logAdmin } from "@/lib/admin-log";
 import { requireAdmin } from "@/lib/guards";
 import { newInviteToken } from "@/lib/invites";
 
@@ -26,6 +27,7 @@ export async function GET() {
             select: {
               id: true,
               completedAt: true,
+              progressStep: true,
               summary: true,
               _count: { select: { turns: true } },
               turns: {
@@ -51,10 +53,13 @@ export async function GET() {
         firstOpenedAt: invite.firstOpenedAt?.toISOString() ?? null,
         lastOpenedAt: invite.lastOpenedAt?.toISOString() ?? null,
         revoked: !!invite.revokedAt,
+        // 舊資料沒有存加密的 token → 只能重新產生
+        canCopyLink: !!invite.tokenEnc,
         session: session
           ? {
               id: session.id,
               completed: !!session.completedAt,
+              progressStep: session.progressStep,
               hasSummary: session.summary !== null,
               turnCount: session._count.turns,
               lastTurnAt: session.turns[0]?.createdAt.toISOString() ?? null,
@@ -67,7 +72,7 @@ export async function GET() {
 
 // -------------------------
 // POST：建立一位受訪者的專屬連結
-// token 只在這次回應出現一次，之後無法再取得（只能重新產生）
+// 之後可以用 GET /api/admin/invites/[inviteId] 再取得同一條連結
 // -------------------------
 export async function POST(req: Request) {
   const guard = await requireAdmin();
@@ -80,16 +85,19 @@ export async function POST(req: Request) {
   }
 
   const session = await auth();
-  const { token, tokenHash } = newInviteToken();
+  const { token, tokenHash, tokenEnc } = newInviteToken();
 
   const invite = await prisma.invite.create({
     data: {
       tokenHash,
+      tokenEnc,
       label,
       createdByEmail: session?.user?.email || null,
       user: { create: {} },
     },
   });
+
+  await logAdmin("invite.create", label);
 
   return NextResponse.json({ id: invite.id, label: invite.label, token });
 }

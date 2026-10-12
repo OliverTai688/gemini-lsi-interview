@@ -42,7 +42,7 @@ export async function POST(
   try {
     const body = (await req.json()) as CreateAssetBody;
 
-    if (!isAssetKind(body.kind)) {
+    if (!isAssetKind(body.kind) || body.kind === "INTERVIEW_AUDIO_MERGED") {
       return NextResponse.json({ error: "Invalid kind" }, { status: 400 });
     }
     const rule = ASSET_RULES[body.kind];

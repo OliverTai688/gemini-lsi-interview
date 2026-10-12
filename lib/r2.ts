@@ -82,6 +82,25 @@ export async function headObject(key: string) {
   }
 }
 
+/** 伺服器端直接下載整個物件 */
+export async function getObjectBytes(key: string) {
+  const res = await r2().send(new GetObjectCommand({ Bucket: bucket(), Key: key }));
+  if (!res.Body) throw new Error(`R2 object has no body: ${key}`);
+  return Buffer.from(await res.Body.transformToByteArray());
+}
+
+/** 伺服器端直接上傳 */
+export async function putObject(key: string, body: Buffer, contentType: string) {
+  await r2().send(
+    new PutObjectCommand({
+      Bucket: bucket(),
+      Key: key,
+      Body: body,
+      ContentType: contentType,
+    })
+  );
+}
+
 export async function deleteObjects(keys: string[]) {
   // DeleteObjects 一次最多 1000 個
   for (let i = 0; i < keys.length; i += 1000) {

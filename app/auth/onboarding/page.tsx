@@ -9,11 +9,14 @@ import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useSession } from "next-auth/react";
+import { useLanguage } from "@/context/LanguageContext";
 
 
 const OnboardingPage = () => {
   const router = useRouter();
   const { data: session, status, update } = useSession();
+  const { t } = useLanguage();
+  const text = t.auth;
 
   const [name, setName] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -55,11 +58,11 @@ const OnboardingPage = () => {
    ------------------------- */
   const validateForm = () => {
     if (!name.trim()) {
-      setError('請輸入您的姓名');
+      setError(text.nameRequired);
       return false;
     }
     if (name.trim().length < 2) {
-      setError('姓名至少需要 2 個字元');
+      setError(text.nameTooShort);
       return false;
     }
     setError('');
@@ -82,7 +85,7 @@ const OnboardingPage = () => {
 
       if (!response.ok) {
         const data = await response.json();
-        throw new Error(data.error || '更新失敗，請重試');
+        throw new Error(data.error || text.updateFailed);
       }
 
       // ⭐⭐⭐ 最重要：更新 JWT session，middleware 才會放你進首頁
@@ -91,7 +94,7 @@ const OnboardingPage = () => {
       router.push('/');
       router.refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : '發生錯誤，請稍後再試');
+      setError(err instanceof Error ? err.message : text.updateFailed);
       setIsLoading(false);
     }
   };
@@ -109,26 +112,26 @@ const OnboardingPage = () => {
           <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-orange-500 mb-4">
             <Sparkles className="w-6 h-6 text-white" />
           </div>
-          <h1 className="text-2xl font-light text-black">Interview AI</h1>
+          <h1 className="text-2xl font-light text-black">{text.brand}</h1>
         </div>
 
         <Card className="border border-gray-200 bg-white shadow-sm">
           <div className="p-8">
             <div className="mb-6">
-              <h2 className="text-xl font-light text-black mb-2">歡迎加入</h2>
-              <p className="text-sm text-gray-500">請完成基本資料以開始使用</p>
+              <h2 className="text-xl font-light text-black mb-2">{text.onboardingTitle}</h2>
+              <p className="text-sm text-gray-500">{text.onboardingSubtitle}</p>
             </div>
 
             <form onSubmit={handleSubmit} className="space-y-5">
               <div className="space-y-2">
                 <Label htmlFor="name">
                   <User className="w-3.5 h-3.5 inline mr-1" />
-                  姓名 <span className="text-orange-500">*</span>
+                  {text.nameLabel} <span className="text-orange-500">*</span>
                 </Label>
                 <Input
                   id="name"
                   type="text"
-                  placeholder="請輸入您的姓名"
+                  placeholder={text.namePlaceholder}
                   value={name}
                   onChange={(e) => {
                     setName(e.target.value);
@@ -161,10 +164,10 @@ const OnboardingPage = () => {
                 {isLoading ? (
                   <>
                     <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                    處理中...
+                    {text.submitting}
                   </>
                 ) : (
-                  '開始使用'
+                  text.submit
                 )}
               </Button>
             </form>

@@ -58,6 +58,12 @@ push / PR ──▶ GitHub Actions（.github/workflows/ci.yml）
 - 建議在 GitHub 的 branch protection 把 `CI / check` 設為合併到 main 的必要條件。
 - 新增資料表時，migration 裡要加 `ALTER TABLE "<表名>" ENABLE ROW LEVEL SECURITY;`，否則 CI 會擋下來。
 
+### 合併錄音（ffmpeg）
+
+素材庫的「合併成單一檔案」會在伺服器上執行 ffmpeg。執行檔來自 `ffmpeg-static` 套件，
+安裝依賴時自動下載，`next.config.ts` 會把它一起打包進那支 API。
+自架主機或本機想用系統的 ffmpeg，可以設 `FFMPEG_PATH`。
+
 ## 本機開發
 
 ```bash

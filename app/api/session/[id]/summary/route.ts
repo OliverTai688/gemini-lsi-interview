@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import OpenAI from "openai";
 import { requireAdmin, requireOwnedSession } from "@/lib/guards";
 import { presignRead } from "@/lib/r2";
+import { logAdmin } from "@/lib/admin-log";
 
 // 一次總結最多附幾張白板完成圖
 const MAX_WHITEBOARDS = 8;
@@ -196,6 +197,7 @@ ${transcript}
             where: { id: sessionId },
             data: { summary: jsonSummary },
         });
+        await logAdmin("summary.generate", session.title ?? sessionId);
 
         return NextResponse.json({ sessionId, summary: jsonSummary });
     } catch (err) {

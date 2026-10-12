@@ -2,6 +2,7 @@
 
 export const ASSET_KINDS = [
   "INTERVIEW_AUDIO",
+  "INTERVIEW_AUDIO_MERGED",
   "WHITEBOARD_VIDEO",
   "WHITEBOARD_SNAPSHOT",
   "WHITEBOARD_STROKES",
@@ -19,6 +20,11 @@ export const ASSET_RULES: Record<
 > = {
   INTERVIEW_AUDIO: {
     maxBytes: 50 * MB,
+    types: { "audio/webm": "webm", "audio/mp4": "m4a", "audio/ogg": "ogg" },
+  },
+  // 由伺服器合併產生，瀏覽器不能直接上傳這一種
+  INTERVIEW_AUDIO_MERGED: {
+    maxBytes: 1024 * MB,
     types: { "audio/webm": "webm", "audio/mp4": "m4a", "audio/ogg": "ogg" },
   },
   WHITEBOARD_VIDEO: {
@@ -86,7 +92,7 @@ export function groupWhiteboardClips(assets: AssetDTO[]): WhiteboardClip[] {
   const clips = new Map<string, WhiteboardClip>();
 
   for (const a of assets) {
-    const inGroup = a.kind !== "INTERVIEW_AUDIO" && (a.kind !== "IMAGE" || !!a.groupId);
+    const inGroup = a.kind.startsWith("WHITEBOARD_") || (a.kind === "IMAGE" && !!a.groupId);
     if (!inGroup) continue;
 
     const key = a.groupId ?? a.id;

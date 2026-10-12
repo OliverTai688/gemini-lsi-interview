@@ -61,6 +61,7 @@ export async function GET(
       title,
       messages,
       completed: !!session.completedAt,
+      progressStep: session.progressStep,
       isOwner: guard.isOwner,
     });
   } catch (error) {

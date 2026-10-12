@@ -23,6 +23,7 @@ R2 物件路徑：`sessions/<sessionId>/<kind>/<uuid>.<ext>`
 | kind | 內容 | 格式 | 上限 |
 |---|---|---|---|
 | `INTERVIEW_AUDIO` | 受訪者麥克風 + AI 語音混音，每 60 秒一段 | webm（Safari 為 m4a） | 50 MB / 段 |
+| `INTERVIEW_AUDIO_MERGED` | 所有分段合併後的單一檔案，由伺服器產生（`POST /api/session/[id]/recording`） | 同分段 | — |
 | `WHITEBOARD_VIDEO` | 白板繪製過程 + 解說音訊，1280×720 | mp4（不支援時 webm） | 500 MB |
 | `WHITEBOARD_SNAPSHOT` | 白板完成圖 | png | 10 MB |
 | `WHITEBOARD_STROKES` | 帶時間戳的筆畫事件，可重新算圖 | json | 20 MB |
@@ -108,8 +109,7 @@ curl -H "Authorization: Bearer $CRON_SECRET" https://<正式網域>/api/cron/cle
 ## 尚未完成
 
 1. **保存期限**：目前素材會一直保留到使用者自己刪除。要不要自動過期、保留多久，需要先決定政策。
-2. **錄音合併 / 轉檔**：把錄音分段合併成單一檔案、把 webm 白板影片轉成 mp4。
-   需要一個能跑 ffmpeg 的背景工作環境（一般的 serverless function 不適合），要先決定放哪裡。
+2. **白板影片轉檔**：Chrome / Safari 錄出來已經是 mp4；Firefox 會是 webm，目前不轉檔。
 3. **白板重播**：用 `WHITEBOARD_STROKES` 做可互動的重播（資料已經有存，只差播放介面）。
 4. **白板自動說明文字**：每段白板存檔後自動產生一段文字描述。
 5. **備份**：Supabase PITR 與 R2 bucket 的異地備份。

@@ -1,7 +1,8 @@
 // app/api/session/[id]/live-turn/route.ts
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireOwnedSession } from "@/lib/guards";
+import { updateProgress } from "@/lib/progress";
 
 export const runtime = "nodejs";
 
@@ -12,6 +13,8 @@ type LiveTurnBody = {
   userStartedAt?: string | null;
   aiStartedAt?: string | null;
   endedAt?: string | null;
+  // 這個瀏覽器分頁的識別碼（見 live-token）
+  clientId?: string;
 };
 
 function toDate(v?: string | null) {
@@ -80,10 +83,24 @@ export async function POST(
       aiTurnId = aiTurn.id;
     }
 
+    // 同一場訪談在另一個裝置開始了 → 這一回合照樣存，但請這邊停下來
+    const current = await prisma.session.findUnique({
+      where: { id: sessionId },
+      select: { activeClientId: true },
+    });
+    const superseded =
+      !!body.clientId &&
+      !!current?.activeClientId &&
+      current.activeClientId !== body.clientId;
+
+    // 回應送出後再判斷訪談進度，不拖慢存檔
+    after(() => updateProgress(sessionId));
+
     return NextResponse.json({
       ok: true,
       userTurnId,
       aiTurnId,
+      superseded,
     });
   } catch (err) {
     console.error("POST /live-turn error:", err);
