@@ -3,8 +3,11 @@ export const runtime = "nodejs";
 
 import NextAuth from "next-auth";
 import Google from "next-auth/providers/google";
+import Credentials from "next-auth/providers/credentials";
 import { PrismaAdapter } from "@auth/prisma-adapter";
 import { prisma } from "@/lib/prisma";
+import { isAdminEmail } from "@/lib/admin";
+import { findActiveInvite } from "@/lib/invites";
 
 export const { auth, signIn, signOut, handlers } = NextAuth({
   adapter: PrismaAdapter(prisma),
@@ -12,9 +15,38 @@ export const { auth, signIn, signOut, handlers } = NextAuth({
   session: { strategy: "jwt" },
 
   providers: [
+    // 研究者 / 管理者：Google 登入
     Google({
       clientId: process.env.GOOGLE_CLIENT_ID!,
       clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
+    }),
+
+    // 受訪者：用專屬連結裡的 token 登入（免帳號）
+    Credentials({
+      id: "invite",
+      name: "Invite link",
+      credentials: { token: {} },
+      async authorize(credentials) {
+        const invite = await findActiveInvite(String(credentials?.token ?? ""));
+        if (!invite) return null;
+
+        const now = new Date();
+        await prisma.invite.update({
+          where: { id: invite.id },
+          data: {
+            firstOpenedAt: invite.firstOpenedAt ?? now,
+            lastOpenedAt: now,
+          },
+        });
+
+        return {
+          id: invite.user.id,
+          name: invite.user.name,
+          email: null,
+          // 記下是用哪一條連結登入的：連結被重新產生後，舊的登入狀態要失效
+          inviteHash: invite.tokenHash,
+        };
+      },
     }),
   ],
 
@@ -22,32 +54,39 @@ export const { auth, signIn, signOut, handlers } = NextAuth({
     /** ────────────────────────────────
      * JWT：把 DB user 資料塞進 token
      ─────────────────────────────────**/
-    async jwt({ token }) {
-  // 若 token 無 email → 直接回傳
-  if (!token.email) return token;
+    async jwt({ token, user }) {
+      // 剛登入時 user 才有值；之後一律用 token.sub（= DB user id）
+      if (user?.id) token.sub = user.id;
+      if (user?.inviteHash) token.inviteHash = user.inviteHash;
+      if (!token.sub) return token;
 
-  // 查詢最新 DB 資料
-  const dbUser = await prisma.user.findUnique({
-    where: { email: token.email },
-    select: {
-      id: true,
-      email: true,
-      name: true,
-      image: true,
-      onboardingCompleted: true,
+      // 查詢最新 DB 資料
+      const dbUser = await prisma.user.findUnique({
+        where: { id: token.sub },
+        select: {
+          id: true,
+          email: true,
+          name: true,
+          image: true,
+          onboardingCompleted: true,
+          invite: { select: { revokedAt: true, tokenHash: true } },
+        },
+      });
+
+      // 帳號已被刪除、邀請連結已停用、或連結已被重新產生（登入時用的是舊連結）→ 登出
+      if (!dbUser || dbUser.invite?.revokedAt) return null;
+      if (dbUser.invite && token.inviteHash !== dbUser.invite.tokenHash) return null;
+
+      token.id = dbUser.id;
+      token.email = dbUser.email;
+      token.name = dbUser.name;
+      token.image = dbUser.image;
+      token.onboardingCompleted = dbUser.onboardingCompleted;
+      token.isGuest = !!dbUser.invite;
+      token.isAdmin = isAdminEmail(dbUser.email);
+
+      return token;
     },
-  });
-
-  if (!dbUser) return token;
-
-  token.id = dbUser.id;
-  token.email = dbUser.email;
-  token.name = dbUser.name;
-  token.image = dbUser.image;
-  token.onboardingCompleted = dbUser.onboardingCompleted;
-
-  return token;
-},
 
     /** ────────────────────────────────
      * session：把 token 帶到前端
@@ -55,11 +94,13 @@ export const { auth, signIn, signOut, handlers } = NextAuth({
     async session({ session, token }) {
       if (session.user) {
         session.user.id = token.id as string;
-        session.user.email = token.email as string;
+        session.user.email = (token.email ?? "") as string;
         session.user.name = token.name as string | null;
         session.user.image = token.image as string | null;
         session.user.onboardingCompleted =
           token.onboardingCompleted as boolean;
+        session.user.isGuest = !!token.isGuest;
+        session.user.isAdmin = !!token.isAdmin;
       }
       return session;
     },

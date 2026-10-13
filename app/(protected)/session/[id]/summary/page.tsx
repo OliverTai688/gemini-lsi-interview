@@ -31,6 +31,8 @@ export default function SummaryPage() {
   const [loading, setLoading] = useState(true);
   const [refreshLoading, setRefreshLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
+  // 管理者看別人的訪談 → 返回後台
+  const [isOwner, setIsOwner] = useState(true);
 
   async function loadSummary() {
     try {
@@ -44,6 +46,7 @@ export default function SummaryPage() {
       } else {
         setSummary(data.summary);
         setTitle(data.session_title ?? t.summaryPage.title);
+        setIsOwner(data.isOwner !== false);
       }
     } catch {
       setErrorMsg("Failed to load summary.");
@@ -142,7 +145,10 @@ export default function SummaryPage() {
     <div className="min-h-screen bg-white">
       <header className="sticky top-0 bg-white border-b border-gray-200 z-10">
         <div className="max-w-4xl mx-auto px-6 py-4 flex items-center justify-between">
-          <Button variant="ghost" onClick={() => router.push(`/session/${id}`)}>
+          <Button
+            variant="ghost"
+            onClick={() => router.push(isOwner ? `/session/${id}` : "/admin")}
+          >
             <ChevronLeft className="w-4 h-4 mr-1" /> {t.summaryPage.back}
           </Button>
 

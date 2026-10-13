@@ -5,11 +5,11 @@ import { auth } from "@/lib/auth"; // NextAuth server-side session
 export async function GET() {
   const session = await auth();
 
-  if (!session?.user?.email)
+  if (!session?.user?.id)
     return NextResponse.json({ user: null });
 
   const user = await prisma.user.findUnique({
-    where: { email: session.user.email },
+    where: { id: session.user.id },
   });
 
   return NextResponse.json({ user });

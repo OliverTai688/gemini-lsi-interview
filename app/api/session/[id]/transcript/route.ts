@@ -2,6 +2,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { GoogleGenAI } from "@google/genai";
+import { requireOwnedSession } from "@/lib/guards";
 
 export const runtime = "nodejs";
 
@@ -15,9 +16,14 @@ const FILE_UPLOAD_URL =
 // -------------------------
 // GET：取得 transcript
 // -------------------------
-export async function GET(req: Request, context: any) {
+export async function GET(
+  req: Request,
+  context: { params: Promise<{ id: string }> }
+) {
   const params = await context.params;
   const sessionId = params.id;
+  const guard = await requireOwnedSession(sessionId, { allowAdmin: true });
+  if (!guard.ok) return guard.response;
 
   try {
     const session = await prisma.session.findUnique({
@@ -38,11 +44,25 @@ export async function GET(req: Request, context: any) {
       role: t.speaker === "user" ? "user" : "model",   // 👈 修正
       content: t.text,
       timestamp: t.createdAt.toISOString(),
+      startedAt: t.startedAt?.toISOString() ?? null,
     }));
 
+    // 沒有標題的訪談（邀請連結建立的）：管理者看到受訪者代號，受訪者看到頁面預設標題
+    let title = session.title;
+    if (!title && !guard.isOwner) {
+      const invite = await prisma.invite.findUnique({
+        where: { userId: session.userId },
+        select: { label: true },
+      });
+      title = invite?.label ?? null;
+    }
+
     return NextResponse.json({
-      title: session.title ?? "Interview Session",
+      title,
       messages,
+      completed: !!session.completedAt,
+      progressStep: session.progressStep,
+      isOwner: guard.isOwner,
     });
   } catch (error) {
     console.error("GET /transcript error:", error);
@@ -75,8 +95,13 @@ async function uploadToGemini(file: File, apiKey: string) {
 // -------------------------
 // POST：語音轉文字（或純文字）
 // -------------------------
-export async function POST(req: Request, context: any) {
+export async function POST(
+  req: Request,
+  context: { params: Promise<{ id: string }> }
+) {
   const { id: sessionId } = await context.params;
+  const guard = await requireOwnedSession(sessionId);
+  if (!guard.ok) return guard.response;
 
   const contentType = req.headers.get("content-type") || "";
   let userText = "";
