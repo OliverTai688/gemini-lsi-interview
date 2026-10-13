@@ -91,7 +91,7 @@ const OnboardingPage = () => {
       // ⭐⭐⭐ 最重要：更新 JWT session，middleware 才會放你進首頁
       await update();
 
-      router.push('/');
+      router.push('/home');
       router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : text.updateFailed);

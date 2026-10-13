@@ -7,6 +7,8 @@ declare module "next-auth" {
     email?: string | null;
     image?: string | null;
     onboardingCompleted?: boolean;
+    /** 受訪者登入時所用連結的雜湊 */
+    inviteHash?: string;
   }
 
   interface Session {
@@ -33,5 +35,6 @@ declare module "next-auth/jwt" {
     onboardingCompleted?: boolean;
     isGuest?: boolean;
     isAdmin?: boolean;
+    inviteHash?: string;
   }
 }

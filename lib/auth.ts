@@ -39,7 +39,13 @@ export const { auth, signIn, signOut, handlers } = NextAuth({
           },
         });
 
-        return { id: invite.user.id, name: invite.user.name, email: null };
+        return {
+          id: invite.user.id,
+          name: invite.user.name,
+          email: null,
+          // 記下是用哪一條連結登入的：連結被重新產生後，舊的登入狀態要失效
+          inviteHash: invite.tokenHash,
+        };
       },
     }),
   ],
@@ -51,6 +57,7 @@ export const { auth, signIn, signOut, handlers } = NextAuth({
     async jwt({ token, user }) {
       // 剛登入時 user 才有值；之後一律用 token.sub（= DB user id）
       if (user?.id) token.sub = user.id;
+      if (user?.inviteHash) token.inviteHash = user.inviteHash;
       if (!token.sub) return token;
 
       // 查詢最新 DB 資料
@@ -62,12 +69,13 @@ export const { auth, signIn, signOut, handlers } = NextAuth({
           name: true,
           image: true,
           onboardingCompleted: true,
-          invite: { select: { revokedAt: true } },
+          invite: { select: { revokedAt: true, tokenHash: true } },
         },
       });
 
-      // 帳號已被刪除、或邀請連結已停用 → 登出
+      // 帳號已被刪除、邀請連結已停用、或連結已被重新產生（登入時用的是舊連結）→ 登出
       if (!dbUser || dbUser.invite?.revokedAt) return null;
+      if (dbUser.invite && token.inviteHash !== dbUser.invite.tokenHash) return null;
 
       token.id = dbUser.id;
       token.email = dbUser.email;
